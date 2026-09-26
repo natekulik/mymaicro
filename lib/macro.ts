@@ -14,9 +14,26 @@ export type MealSlot = {
   macros: Macro;
 };
 
+// User-customizable accent colors for the three macros, as raw CSS color
+// values (not Tailwind classes) — a user can pick any color, and Tailwind's
+// JIT compiler can only ever render classes it saw literally in source, so
+// arbitrary picked colors have to be applied via inline style instead.
+export type MacroColors = {
+  protein: string;
+  carbs: string;
+  fat: string;
+};
+
+export const DEFAULT_MACRO_COLORS: MacroColors = {
+  protein: "#f43f5e", // rose-500
+  carbs: "#f59e0b", // amber-500
+  fat: "#0ea5e9", // sky-500
+};
+
 export type MacroProfile = {
   dailyTarget: Macro;
   meals: MealSlot[];
+  macroColors: MacroColors;
 };
 
 export function emptyMacro(): Macro {
@@ -87,5 +104,6 @@ export function defaultProfile(): MacroProfile {
   return {
     dailyTarget,
     meals: splitEvenly(dailyTarget, 3),
+    macroColors: { ...DEFAULT_MACRO_COLORS },
   };
 }

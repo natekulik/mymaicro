@@ -33,6 +33,17 @@ type Override = Partial<
   >
 >;
 
+// A hand-typed nutrition entry for an ingredient with no USDA match at
+// all. Calories is required to be usable; protein/carbs/fat are optional
+// and stay `null` until the user fills them in via the "Add macros"
+// sub-form, so incomplete entries can be detected and flagged.
+type ManualEntry = {
+  calories: number;
+  protein: number | null;
+  carbs: number | null;
+  fat: number | null;
+};
+
 const RECOMPUTE_UNITS = [
   { value: "g", label: "grams" },
   { value: "oz", label: "ounces" },
@@ -90,6 +101,16 @@ export default function RecipeAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RecipeResult | null>(null);
   const [overrides, setOverrides] = useState<Record<number, Override>>({});
+  // Keyed by ingredient index — calories (required) and optional
+  // protein/carbs/fat the user typed in by hand for an ingredient the USDA
+  // database has no match for at all. Stored as per-serving (what the user
+  // actually sees and types), then converted to whole-recipe totals when
+  // merged into effectiveDetails so they compose with every other
+  // ingredient's macros, which are all whole-recipe totals divided down by
+  // servings in one place at the end. protein/carbs/fat stay `null` (not
+  // 0) until the user actually fills them in, so the UI can tell "left
+  // blank" apart from "entered as zero".
+  const [manualEntries, setManualEntries] = useState<Record<number, ManualEntry>>({});
   // Keyed by ingredient index — true once the user has explicitly clicked
   // Confirm on that ingredient's "Which kind?" picker for whatever's
   // currently selected. Starts false even for the auto-picked default, and
@@ -113,6 +134,7 @@ export default function RecipeAnalysis() {
     setError(null);
     setResult(null);
     setOverrides({});
+    setManualEntries({});
     setConfirmedVariants({});
     setNutrientView("macros");
     setServingsInput("");
@@ -158,6 +180,7 @@ export default function RecipeAnalysis() {
     setError(null);
     setResult(null);
     setOverrides({});
+    setManualEntries({});
     setConfirmedVariants({});
     setNutrientView("macros");
     setServingsInput("");
@@ -168,8 +191,34 @@ export default function RecipeAnalysis() {
 
   const effectiveDetails = useMemo<IngredientMacroDetail[]>(() => {
     if (!result) return [];
-    return result.ingredientDetails.map((d, i) => ({ ...d, ...overrides[i] }));
-  }, [result, overrides]);
+    return result.ingredientDetails.map((d, i) => {
+      const merged = { ...d, ...overrides[i] };
+      const entry = manualEntries[i];
+      // Only fills a gap — a real USDA match (or a resolved quantity) never
+      // gets overwritten by a hand-typed entry. Protein/carbs/fat default
+      // to 0 here (for the totals) even when the user hasn't filled them
+      // in yet — `hasIncompleteManualMacros` below is what surfaces that
+      // gap to the user, rather than silently under-counting forever.
+      if (entry !== undefined && merged.macros === null) {
+        const multiplier = hasValidServings ? effectiveServings! : 1;
+        merged.macros = {
+          calories: entry.calories * multiplier,
+          protein: (entry.protein ?? 0) * multiplier,
+          carbs: (entry.carbs ?? 0) * multiplier,
+          fat: (entry.fat ?? 0) * multiplier,
+        };
+      }
+      return merged;
+    });
+  }, [result, overrides, manualEntries, hasValidServings, effectiveServings]);
+
+  // True once at least one manually-added ingredient has calories but is
+  // still missing protein/carbs/fat — surfaced as a heads-up near the
+  // overall Macros/Micros totals, since those numbers are quietly treating
+  // the missing fields as 0 rather than "unknown" until filled in.
+  const hasIncompleteManualMacros = Object.values(manualEntries).some(
+    (e) => e.protein === null || e.carbs === null || e.fat === null,
+  );
 
   // Recomputed locally from effectiveDetails whenever an override changes,
   // so picking a variant or filling in a quantity updates the totals
@@ -271,6 +320,28 @@ export default function RecipeAnalysis() {
     setOverrides((prev) => ({
       ...prev,
       [index]: { macros, micros, grams, needsQuantity: false, gramsSource: "unit_conversion" },
+    }));
+  }
+
+  function applyManualCalories(index: number, caloriesPerServing: number) {
+    setManualEntries((prev) => ({
+      ...prev,
+      [index]: {
+        calories: caloriesPerServing,
+        protein: prev[index]?.protein ?? null,
+        carbs: prev[index]?.carbs ?? null,
+        fat: prev[index]?.fat ?? null,
+      },
+    }));
+  }
+
+  function applyManualMacros(
+    index: number,
+    macros: { protein: number; carbs: number; fat: number },
+  ) {
+    setManualEntries((prev) => ({
+      ...prev,
+      [index]: { calories: prev[index]?.calories ?? 0, ...macros },
     }));
   }
 
@@ -482,10 +553,17 @@ export default function RecipeAnalysis() {
               </div>
             )}
 
+            {hasIncompleteManualMacros && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+                Some macros aren&apos;t filled in for ingredients below — add them under
+                &quot;How this was calculated&quot; for a more complete total.
+              </p>
+            )}
+
             {nutrientView === "macros" ? (
               macrosReady ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <MacroStat label="Calories" value={nutrition!.calories} unit="kcal" />
+                  <MacroStat label="Calories" value={nutrition!.calories} unit="cals" />
                   <MacroStat label="Protein" value={nutrition!.protein} unit="g" accent="bg-rose-500" />
                   <MacroStat label="Carbs" value={nutrition!.carbs} unit="g" accent="bg-amber-500" />
                   <MacroStat label="Fat" value={nutrition!.fat} unit="g" accent="bg-sky-500" />
@@ -524,6 +602,9 @@ export default function RecipeAnalysis() {
               onVariantChange={applyVariant}
               onVariantConfirm={confirmVariant}
               onQuantityResolved={applyQuantity}
+              manualEntries={manualEntries}
+              onManualCaloriesChange={applyManualCalories}
+              onManualMacrosChange={applyManualMacros}
             />
           )}
 
@@ -563,9 +644,13 @@ function SaveRecipeButton({
       onClick={onClick}
       disabled={disabled}
       title={disabled ? "Finish the macro and micro breakdown above to save this recipe" : undefined}
-      className="whitespace-nowrap rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+      className={`whitespace-nowrap rounded-full border px-5 py-2.5 text-sm font-medium transition-colors duration-500 disabled:cursor-not-allowed disabled:opacity-40 ${
+        saved
+          ? "animate-save-ring border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400"
+          : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+      }`}
     >
-      {saved ? "Saved to My Recipes ✓" : "Add to My Recipes"}
+      {saved ? "Saved to My Recipes" : "Add to My Recipes"}
     </button>
   );
 }
@@ -658,14 +743,25 @@ function IngredientBreakdown({
   onVariantChange,
   onVariantConfirm,
   onQuantityResolved,
+  manualEntries,
+  onManualCaloriesChange,
+  onManualMacrosChange,
 }: {
   details: IngredientMacroDetail[];
   confirmedVariants: Record<number, boolean>;
   onVariantChange: (index: number, variant: VariantOption) => void;
   onVariantConfirm: (index: number) => void;
   onQuantityResolved: (index: number, grams: number, macros: NutritionMacro, micros: MicroTotals) => void;
+  manualEntries: Record<number, ManualEntry>;
+  onManualCaloriesChange: (index: number, caloriesPerServing: number) => void;
+  onManualMacrosChange: (index: number, macros: { protein: number; carbs: number; fat: number }) => void;
 }) {
   const matched = details.filter((d) => d.grams !== null).length;
+  // Scale for the per-ingredient calorie bars below — each bar is that
+  // ingredient's share of the recipe's total calories, so all the bars
+  // (if you added their widths up) sum to one full bar, not just "how big
+  // is this one next to the single biggest ingredient."
+  const totalCalories = details.reduce((sum, d) => sum + (d.macros?.calories ?? 0), 0);
 
   // Attention-needed ingredients (an unfilled amount, or an unconfirmed
   // "which kind?") float to the top; everything else stays in the order it
@@ -677,8 +773,16 @@ function IngredientBreakdown({
     .map((d, i) => ({ d, i }))
     .sort((a, b) => Number(needsAttention(b.d, b.i)) - Number(needsAttention(a.d, a.i)));
 
+  function isUnmatched(d: IngredientMacroDetail): boolean {
+    return !d.matchedDescription && !d.needsQuantity;
+  }
+
   function needsAttention(d: IngredientMacroDetail, i: number): boolean {
-    return d.needsQuantity || (d.variantOptions.length > 0 && !confirmedVariants[i]);
+    return (
+      d.needsQuantity ||
+      (d.variantOptions.length > 0 && !confirmedVariants[i]) ||
+      (isUnmatched(d) && manualEntries[i] === undefined)
+    );
   }
 
   return (
@@ -716,7 +820,7 @@ function IngredientBreakdown({
           >
             <div className="flex items-start justify-between gap-3">
               <span className="text-zinc-600 dark:text-zinc-300">{d.raw}</span>
-              <StatusBadge detail={d} />
+              <StatusBadge detail={d} manualEntry={manualEntries[i]} />
             </div>
             {d.matchedDescription && !d.needsQuantity && (
               <span className="text-zinc-400">
@@ -725,6 +829,22 @@ function IngredientBreakdown({
                 {d.matchSource &&
                   ` (${d.matchSource === "foundation" ? "USDA Foundation" : "USDA SR Legacy"})`}
               </span>
+            )}
+
+            {d.macros?.calories != null && (
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-orange-400 dark:bg-orange-500"
+                    style={{
+                      width: `${totalCalories > 0 ? (d.macros.calories / totalCalories) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <span className="whitespace-nowrap text-zinc-400">
+                  {Math.round(d.macros.calories)} cals
+                </span>
+              </div>
             )}
 
             {d.variantOptions.length > 0 && (
@@ -742,6 +862,14 @@ function IngredientBreakdown({
                 onResolved={(grams, macros, micros) => onQuantityResolved(i, grams, macros, micros)}
               />
             )}
+
+            {isUnmatched(d) && (
+              <ManualCaloriesPrompt
+                savedEntry={manualEntries[i]}
+                onSaveCalories={(calories) => onManualCaloriesChange(i, calories)}
+                onSaveMacros={(macros) => onManualMacrosChange(i, macros)}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -749,7 +877,13 @@ function IngredientBreakdown({
   );
 }
 
-function StatusBadge({ detail }: { detail: IngredientMacroDetail }) {
+function StatusBadge({
+  detail,
+  manualEntry,
+}: {
+  detail: IngredientMacroDetail;
+  manualEntry?: ManualEntry;
+}) {
   if (detail.needsQuantity) {
     return (
       <span className="whitespace-nowrap font-medium text-amber-600 dark:text-amber-400">
@@ -772,7 +906,16 @@ function StatusBadge({ detail }: { detail: IngredientMacroDetail }) {
       </span>
     );
   }
-  return <span className="whitespace-nowrap font-medium text-zinc-400">no match</span>;
+  if (manualEntry !== undefined) {
+    return (
+      <span className="whitespace-nowrap font-medium text-emerald-600 dark:text-emerald-400">
+        added manually
+      </span>
+    );
+  }
+  return (
+    <span className="whitespace-nowrap font-medium text-amber-600 dark:text-amber-400">no match</span>
+  );
 }
 
 function VariantPicker({
@@ -931,5 +1074,131 @@ function QuantityPrompt({
       )}
       {error && <span className="text-rose-600 dark:text-rose-400">{error}</span>}
     </form>
+  );
+}
+
+function ManualCaloriesPrompt({
+  savedEntry,
+  onSaveCalories,
+  onSaveMacros,
+}: {
+  savedEntry: ManualEntry | undefined;
+  onSaveCalories: (caloriesPerServing: number) => void;
+  onSaveMacros: (macros: { protein: number; carbs: number; fat: number }) => void;
+}) {
+  const [amount, setAmount] = useState(savedEntry ? String(savedEntry.calories) : "");
+  const [macrosOpen, setMacrosOpen] = useState(false);
+  const [protein, setProtein] = useState(savedEntry?.protein != null ? String(savedEntry.protein) : "");
+  const [carbs, setCarbs] = useState(savedEntry?.carbs != null ? String(savedEntry.carbs) : "");
+  const [fat, setFat] = useState(savedEntry?.fat != null ? String(savedEntry.fat) : "");
+
+  const hasMacros = savedEntry?.protein != null || savedEntry?.carbs != null || savedEntry?.fat != null;
+
+  function handleCaloriesSubmit(e: FormEvent) {
+    e.preventDefault();
+    const calories = Number(amount);
+    if (!calories || calories <= 0) return;
+    onSaveCalories(calories);
+  }
+
+  function handleMacrosSubmit(e: FormEvent) {
+    e.preventDefault();
+    onSaveMacros({
+      protein: Number(protein) || 0,
+      carbs: Number(carbs) || 0,
+      fat: Number(fat) || 0,
+    });
+    setMacrosOpen(false);
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        Not in the USDA database — add its nutrition by hand to include it in the totals.
+      </span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <form onSubmit={handleCaloriesSubmit} className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 dark:bg-amber-950/40">
+          <input
+            type="number"
+            min={0}
+            step="any"
+            placeholder="Calories"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="w-20 rounded-md border border-amber-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none dark:border-amber-900 dark:bg-zinc-900 dark:text-zinc-200"
+          />
+          <span className="whitespace-nowrap text-xs text-amber-600 dark:text-amber-400">
+            cals per serving
+          </span>
+          <button
+            type="submit"
+            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
+          >
+            {savedEntry ? "Update" : "Add"}
+          </button>
+        </form>
+        <button
+          type="button"
+          onClick={() => setMacrosOpen((open) => !open)}
+          className="whitespace-nowrap rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          {hasMacros ? "Edit macros" : "+ Add macros"}
+        </button>
+        {hasMacros && !macrosOpen && (
+          <span className="text-xs text-zinc-400">
+            Protein {savedEntry?.protein ?? 0}g · Carbs {savedEntry?.carbs ?? 0}g · Fat {savedEntry?.fat ?? 0}g
+          </span>
+        )}
+      </div>
+      {macrosOpen && (
+        <form
+          onSubmit={handleMacrosSubmit}
+          className="flex flex-wrap items-center gap-2 rounded-lg bg-zinc-50 px-2.5 py-2 dark:bg-zinc-800"
+        >
+          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Protein
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={protein}
+              onChange={(e) => setProtein(e.target.value)}
+              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+            />
+            g
+          </label>
+          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Carbs
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={carbs}
+              onChange={(e) => setCarbs(e.target.value)}
+              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+            />
+            g
+          </label>
+          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+            Fat
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={fat}
+              onChange={(e) => setFat(e.target.value)}
+              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+            />
+            g
+          </label>
+          <button
+            type="submit"
+            className="rounded-md bg-zinc-700 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-zinc-600 dark:bg-zinc-600 dark:hover:bg-zinc-500"
+          >
+            Save
+          </button>
+        </form>
+      )}
+    </div>
   );
 }

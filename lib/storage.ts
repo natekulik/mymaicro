@@ -2,7 +2,7 @@
 // place that knows about localStorage — swapping this out for real API
 // calls once auth + a database exist won't touch any component.
 
-import type { MacroProfile } from "./macro";
+import { DEFAULT_MACRO_COLORS, type MacroProfile } from "./macro";
 
 const STORAGE_KEY = "mymaicro:profile:v1";
 
@@ -11,7 +11,11 @@ export function loadProfile(): MacroProfile | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as MacroProfile;
+    const parsed = JSON.parse(raw) as MacroProfile;
+    // Profiles saved before macro colors existed won't have this field —
+    // fill it in rather than let every color-reading call site handle
+    // `undefined`.
+    return { ...parsed, macroColors: { ...DEFAULT_MACRO_COLORS, ...parsed.macroColors } };
   } catch {
     return null;
   }

@@ -4,14 +4,14 @@ type Props = {
   label: string;
   value: number;
   onChange: (value: number) => void;
-  accent?: string; // tailwind bg-* class for the little label dot
+  color?: string; // CSS color for the little label dot — user-customizable, so a raw value rather than a Tailwind class
 };
 
-export default function NumberField({ label, value, onChange, accent }: Props) {
+export default function NumberField({ label, value, onChange, color }: Props) {
   return (
     <label className="flex flex-col gap-1">
       <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        {accent && <span className={`h-2 w-2 rounded-full ${accent}`} />}
+        {color && <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />}
         {label}
       </span>
       <input

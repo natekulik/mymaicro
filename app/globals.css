@@ -24,3 +24,20 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* A soft green ring that expands outward and fades — plays once when a
+   button first picks up .animate-save-ring, then leaves the element's own
+   background transition (see .save-button-saved) to settle into its
+   resting fill. */
+@keyframes save-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+  }
+}
+
+.animate-save-ring {
+  animation: save-ring 650ms ease-out;
+}

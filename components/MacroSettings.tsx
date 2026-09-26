@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   type Macro,
+  type MacroColors,
   type MacroProfile,
   calories,
   defaultProfile,
@@ -20,6 +21,7 @@ const MAX_MEALS = 8;
 
 export default function MacroSettings() {
   const [profile, setProfile] = useState<MacroProfile | null>(null);
+  const [colorsOpen, setColorsOpen] = useState(false);
 
   // Load once on mount — localStorage doesn't exist during server render.
   useEffect(() => {
@@ -45,6 +47,10 @@ export default function MacroSettings() {
 
   function updateDailyTarget(next: Macro) {
     setProfile((p) => (p ? { ...p, dailyTarget: next } : p));
+  }
+
+  function updateMacroColor(key: keyof MacroColors, value: string) {
+    setProfile((p) => (p ? { ...p, macroColors: { ...p.macroColors, [key]: value } } : p));
   }
 
   function updateMealCount(count: number) {
@@ -95,25 +101,58 @@ export default function MacroSettings() {
       {/* Daily target */}
       <section className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Daily target</h2>
-          <span className="text-sm font-medium text-zinc-400">{dailyCalories} kcal</span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Daily target</h2>
+            <button
+              type="button"
+              onClick={() => setColorsOpen((o) => !o)}
+              className="rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              Choose colors
+            </button>
+          </div>
+          <span className="text-sm font-medium text-zinc-400">{dailyCalories} cals</span>
         </div>
+
+        {colorsOpen && (
+          <div className="flex flex-wrap items-center gap-4 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800">
+            <ColorPickerField
+              label="Protein"
+              value={profile.macroColors.protein}
+              onChange={(v) => updateMacroColor("protein", v)}
+            />
+            <ColorPickerField
+              label="Carbs"
+              value={profile.macroColors.carbs}
+              onChange={(v) => updateMacroColor("carbs", v)}
+            />
+            <ColorPickerField
+              label="Fat"
+              value={profile.macroColors.fat}
+              onChange={(v) => updateMacroColor("fat", v)}
+            />
+            <p className="text-xs text-zinc-400">
+              These colors also show up on your Weekly Plan.
+            </p>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <NumberField
             label="Protein (g)"
-            accent="bg-rose-500"
+            color={profile.macroColors.protein}
             value={profile.dailyTarget.protein}
             onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, protein: v })}
           />
           <NumberField
             label="Carbs (g)"
-            accent="bg-amber-500"
+            color={profile.macroColors.carbs}
             value={profile.dailyTarget.carbs}
             onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, carbs: v })}
           />
           <NumberField
             label="Fat (g)"
-            accent="bg-sky-500"
+            color={profile.macroColors.fat}
             value={profile.dailyTarget.fat}
             onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, fat: v })}
           />
@@ -164,6 +203,7 @@ export default function MacroSettings() {
               key={meal.id}
               name={meal.name}
               macros={meal.macros}
+              macroColors={profile.macroColors}
               onNameChange={(name) => updateMeal(meal.id, { name })}
               onMacrosChange={(macros) => updateMeal(meal.id, { macros })}
             />
@@ -182,7 +222,7 @@ export default function MacroSettings() {
               mealCalories > dailyCalories ? "text-rose-500" : "text-zinc-400"
             }`}
           >
-            {mealCalories} / {dailyCalories} kcal
+            {mealCalories} / {dailyCalories} cals
           </span>
         </div>
         <div className="flex flex-col gap-3">
@@ -191,21 +231,21 @@ export default function MacroSettings() {
             unit="g"
             actual={mealTotals.protein}
             target={profile.dailyTarget.protein}
-            barClass="bg-rose-500"
+            color={profile.macroColors.protein}
           />
           <ProgressRow
             label="Carbs"
             unit="g"
             actual={mealTotals.carbs}
             target={profile.dailyTarget.carbs}
-            barClass="bg-amber-500"
+            color={profile.macroColors.carbs}
           />
           <ProgressRow
             label="Fat"
             unit="g"
             actual={mealTotals.fat}
             target={profile.dailyTarget.fat}
-            barClass="bg-sky-500"
+            color={profile.macroColors.fat}
           />
         </div>
       </section>
@@ -214,5 +254,27 @@ export default function MacroSettings() {
         Saved locally in this browser for now — accounts &amp; sync come next.
       </p>
     </div>
+  );
+}
+
+function ColorPickerField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-7 w-7 cursor-pointer rounded-md border border-zinc-200 bg-transparent p-0 dark:border-zinc-700"
+      />
+      {label}
+    </label>
   );
 }

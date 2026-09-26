@@ -206,15 +206,25 @@ function headWordOf(searchName: string): string | null {
   return words[words.length - 1] ?? null;
 }
 
-// Tier 2: the category IS the head word, nothing else ("Onion, raw" for
-// "onion"). Tier 1: the category merely contains it as one of several
-// words ("Onion rings, breaded..." for "onion") — a much weaker signal,
-// since it's very often a different food entirely. Tier 0: no match.
-function headTierOf(description: string, headWord: string | null): 0 | 1 | 2 {
+// Tier 3: the category IS the head word, nothing else ("Onion, raw" for
+// "onion"). Tier 2: some other segment stands alone as exactly the head
+// word — USDA often names things "<generic classifier>, <actual food>,
+// ..." ("Alcoholic beverage, wine, cooking", "Snacks, popcorn, ..."), so
+// the head noun for a search like "rice wine" (head word "wine") lands in
+// the second segment, not the first, and still deserves strong credit.
+// Tier 1: the category merely contains it as one of several words ("Onion
+// rings, breaded..." for "onion") — a much weaker signal, since it's very
+// often a different food entirely. Tier 0: no match.
+function headTierOf(description: string, headWord: string | null): 0 | 1 | 2 | 3 {
   if (!headWord) return 0;
-  const category = segmentsOf(description)[0] ?? "";
+  const segments = segmentsOf(description);
+  const category = segments[0] ?? "";
   const categoryWords = category.split(/\s+/).filter(Boolean).map(normalizeWord);
-  if (categoryWords.length === 1 && categoryWords[0] === headWord) return 2;
+  if (categoryWords.length === 1 && categoryWords[0] === headWord) return 3;
+  for (const segment of segments.slice(1)) {
+    const segmentWords = segment.split(/\s+/).filter(Boolean).map(normalizeWord);
+    if (segmentWords.length === 1 && segmentWords[0] === headWord) return 2;
+  }
   if (categoryWords.includes(headWord)) return 1;
   return 0;
 }
@@ -292,7 +302,7 @@ function findVariantFamily(candidates: FoodCandidate[], searchName: string): Var
   const headWord = headWordOf(searchName);
   if (!headWord) return null;
 
-  const topTier = candidates.filter((c) => headTierOf(c.match.description, headWord) === 2);
+  const topTier = candidates.filter((c) => headTierOf(c.match.description, headWord) === 3);
   const withMacros = topTier
     .map((c) => ({ candidate: c, per100g: getMacrosPer100g(c.match.fdcId) }))
     .filter((x): x is { candidate: FoodCandidate; per100g: Macro } => x.per100g !== null);

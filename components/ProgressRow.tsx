@@ -3,10 +3,10 @@ type Props = {
   actual: number;
   target: number;
   unit: string;
-  barClass: string; // tailwind bg-* class for the fill when within budget
+  color: string; // CSS color for the fill when within budget — user-customizable, so a raw value rather than a Tailwind class
 };
 
-export default function ProgressRow({ label, actual, target, unit, barClass }: Props) {
+export default function ProgressRow({ label, actual, target, unit, color }: Props) {
   const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
   const over = target > 0 && actual > target;
   const diff = Math.round(actual - target);
@@ -27,8 +27,8 @@ export default function ProgressRow({ label, actual, target, unit, barClass }: P
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
         <div
-          className={`h-full rounded-full transition-all ${over ? "bg-rose-500" : barClass}`}
-          style={{ width: `${pct}%` }}
+          className={`h-full rounded-full transition-all ${over ? "bg-rose-500" : ""}`}
+          style={{ width: `${pct}%`, backgroundColor: over ? undefined : color }}
         />
       </div>
     </div>
