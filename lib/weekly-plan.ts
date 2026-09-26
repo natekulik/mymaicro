@@ -4,6 +4,8 @@
 // the Weekly Plan tab and the My Recipes tab can share the exact same
 // add/remove/paste logic instead of reimplementing it twice.
 
+import type { SavedRecipe } from "./saved-recipes";
+
 export type PlannedMeal = {
   id: string;
   recipeId: string;
@@ -133,6 +135,35 @@ export function removeSubsection(plan: WeeklyPlan, day: string, subsection: stri
         : d,
     ),
   };
+}
+
+export type DayTotals = { calories: number; protein: number; carbs: number; fat: number } | null;
+
+// Sums the per-serving nutrition of a set of planned meals against the
+// saved recipes they point to — null (rather than all-zero) when none of
+// them resolve to anything, so callers can show "—" instead of a
+// misleading "0 cals". Shared by Weekly Plan's whole-day and per-subsection
+// totals and by Historical Plan's per-date totals.
+export function sumPlannedMeals(meals: PlannedMeal[], recipes: SavedRecipe[]): DayTotals {
+  let calories = 0;
+  let protein = 0;
+  let carbs = 0;
+  let fat = 0;
+  let any = false;
+  for (const meal of meals) {
+    const recipe = recipes.find((r) => r.id === meal.recipeId);
+    if (!recipe) continue;
+    any = true;
+    calories += recipe.nutrition.calories ?? 0;
+    protein += recipe.nutrition.protein ?? 0;
+    carbs += recipe.nutrition.carbs ?? 0;
+    fat += recipe.nutrition.fat ?? 0;
+  }
+  return any ? { calories, protein, carbs, fat } : null;
+}
+
+export function dayTotals(day: DayPlan, recipes: SavedRecipe[]): DayTotals {
+  return sumPlannedMeals(day.meals, recipes);
 }
 
 // Overwrites every other day's subsections + meals with the source day's —

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   IngredientMacroDetail,
   MicroTotals,
@@ -9,7 +9,7 @@ import type {
   VariantOption,
 } from "@/lib/recipe-types";
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
-import { saveRecipe } from "@/lib/saved-recipes";
+import { loadSavedRecipes, saveRecipe, updateSavedRecipe } from "@/lib/saved-recipes";
 
 type Mode = "url" | "manual";
 type NutrientView = "macros" | "micros";
@@ -125,9 +125,40 @@ export default function RecipeAnalysis() {
   // True right after "Add to My Recipes" is clicked for the current
   // result — just for the button's brief "Saved ✓" feedback.
   const [justSaved, setJustSaved] = useState(false);
+  // Set when this analysis was opened via "Edit Recipe" from My Recipes —
+  // the id of the saved recipe being edited, so the save button updates it
+  // in place instead of creating a new one. Cleared by switchMode, since
+  // deliberately switching URL/Manual tabs means starting a fresh analysis.
+  const [editingRecipeId, setEditingRecipeId] = useState<string | null>(null);
 
   const effectiveServings = servingsInput.trim() ? Number(servingsInput) : null;
   const hasValidServings = effectiveServings !== null && effectiveServings > 0;
+
+  // "Edit Recipe" on My Recipes links here as /recipe-analysis?edit=<id> —
+  // on mount, load that saved recipe straight into Manual Entry and
+  // immediately re-run the analysis, so the user lands on the full,
+  // editable ingredient breakdown rather than an empty form. Reads the
+  // query string directly from window.location (rather than
+  // next/navigation's useSearchParams) so this page doesn't need a
+  // Suspense boundary just for a one-time read on mount.
+  useEffect(() => {
+    const editId = new URLSearchParams(window.location.search).get("edit");
+    if (!editId) return;
+    const recipe = loadSavedRecipes().find((r) => r.id === editId);
+    if (!recipe) return;
+    setMode("manual");
+    setManualTitle(recipe.title);
+    setManualServings(String(recipe.servings));
+    setManualText(recipe.ingredients.join("\n"));
+    setEditingRecipeId(recipe.id);
+    runAnalyze("/api/analyze-recipe-manual", {
+      title: recipe.title,
+      text: recipe.ingredients.join("\n"),
+      servings: recipe.servings,
+    });
+    // Runs once on mount only — intentionally not re-running on every
+    // render.
+  }, []);
 
   async function runAnalyze(endpoint: string, payload: unknown) {
     setLoading(true);
@@ -185,6 +216,7 @@ export default function RecipeAnalysis() {
     setNutrientView("macros");
     setServingsInput("");
     setJustSaved(false);
+    setEditingRecipeId(null);
   }
 
   const isEstimated = result ? !result.nutrition && !!result.estimatedNutrition : false;
@@ -351,19 +383,24 @@ export default function RecipeAnalysis() {
   // rather than the live analyze state.
   function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
-    saveRecipe({
+    const patch = {
       title: result.title,
       sourceUrl: result.sourceUrl,
       servings: effectiveServings,
       nutrition,
       micros,
       ingredients: result.ingredients,
-    });
+    };
+    if (editingRecipeId) {
+      updateSavedRecipe(editingRecipeId, patch);
+    } else {
+      saveRecipe(patch);
+    }
     setJustSaved(true);
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-12">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
           Macro &amp; Micro analysis
@@ -423,7 +460,12 @@ export default function RecipeAnalysis() {
           >
             {loading ? "Analyzing…" : "Analyze"}
           </button>
-          <SaveRecipeButton disabled={!(macrosReady && microsReady)} saved={justSaved} onClick={handleSaveRecipe} />
+          <SaveRecipeButton
+            disabled={!(macrosReady && microsReady)}
+            saved={justSaved}
+            editing={!!editingRecipeId}
+            onClick={handleSaveRecipe}
+          />
         </form>
       ) : (
         <form
@@ -478,7 +520,12 @@ export default function RecipeAnalysis() {
             >
               {loading ? "Analyzing…" : "Analyze"}
             </button>
-            <SaveRecipeButton disabled={!(macrosReady && microsReady)} saved={justSaved} onClick={handleSaveRecipe} />
+            <SaveRecipeButton
+              disabled={!(macrosReady && microsReady)}
+              saved={justSaved}
+              editing={!!editingRecipeId}
+              onClick={handleSaveRecipe}
+            />
           </div>
         </form>
       )}
@@ -632,10 +679,12 @@ export default function RecipeAnalysis() {
 function SaveRecipeButton({
   disabled,
   saved,
+  editing,
   onClick,
 }: {
   disabled: boolean;
   saved: boolean;
+  editing: boolean;
   onClick: () => void;
 }) {
   return (
@@ -650,7 +699,7 @@ function SaveRecipeButton({
           : "border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
       }`}
     >
-      {saved ? "Saved to My Recipes" : "Add to My Recipes"}
+      {saved ? (editing ? "Recipe Updated" : "Saved to My Recipes") : editing ? "Update My Recipe" : "Add to My Recipes"}
     </button>
   );
 }

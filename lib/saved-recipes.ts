@@ -53,3 +53,21 @@ export function saveRecipe(recipe: Omit<SavedRecipe, "id" | "savedAt">): SavedRe
 export function removeSavedRecipe(id: string): void {
   persist(loadSavedRecipes().filter((r) => r.id !== id));
 }
+
+// Overwrites an existing saved recipe in place (same id, so its position
+// in Weekly Plan meal assignments — which reference recipes by id — stays
+// intact), bumping savedAt to reflect the edit. Returns null if the recipe
+// no longer exists (e.g. removed in another tab).
+export function updateSavedRecipe(
+  id: string,
+  patch: Omit<SavedRecipe, "id" | "savedAt">,
+): SavedRecipe | null {
+  const recipes = loadSavedRecipes();
+  const idx = recipes.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const updated: SavedRecipe = { ...patch, id, savedAt: new Date().toISOString() };
+  const next = [...recipes];
+  next[idx] = updated;
+  persist(next);
+  return updated;
+}

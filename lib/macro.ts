@@ -56,6 +56,21 @@ export function sumMacros(meals: MealSlot[]): Macro {
   );
 }
 
+// Per-macro "does the day's meal total exactly hit the daily target" flag —
+// "match" only for an exact hit, "mismatch" for either under OR over, since
+// the target is precise rather than a range.
+export type MatchStatus = "match" | "mismatch";
+export type MacroMatchStatus = Record<keyof Macro, MatchStatus>;
+
+export function macroMatchStatus(actual: Macro, target: Macro): MacroMatchStatus {
+  const status = (a: number, t: number): MatchStatus => (a === t ? "match" : "mismatch");
+  return {
+    protein: status(actual.protein, target.protein),
+    carbs: status(actual.carbs, target.carbs),
+    fat: status(actual.fat, target.fat),
+  };
+}
+
 let idCounter = 0;
 export function newId(): string {
   idCounter += 1;

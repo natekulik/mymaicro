@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { loadSavedRecipes, removeSavedRecipe, type SavedRecipe } from "@/lib/saved-recipes";
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
 import {
@@ -38,7 +39,7 @@ export default function MyRecipes() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-12">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
           My recipes
@@ -99,9 +100,17 @@ function RecipeCard({
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {recipe.title}
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              {recipe.title}
+            </h2>
+            <Link
+              href={`/recipe-analysis?edit=${recipe.id}`}
+              className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            >
+              Edit Recipe
+            </Link>
+          </div>
           {recipe.sourceUrl && (
             <a
               href={recipe.sourceUrl}

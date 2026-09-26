@@ -7,6 +7,7 @@ import {
   type MacroProfile,
   calories,
   defaultProfile,
+  macroMatchStatus,
   newId,
   splitEvenly,
   sumMacros,
@@ -44,6 +45,7 @@ export default function MacroSettings() {
   const mealTotals = sumMacros(profile.meals);
   const dailyCalories = calories(profile.dailyTarget);
   const mealCalories = calories(mealTotals);
+  const macroStatus = macroMatchStatus(mealTotals, profile.dailyTarget);
 
   function updateDailyTarget(next: Macro) {
     setProfile((p) => (p ? { ...p, dailyTarget: next } : p));
@@ -88,7 +90,7 @@ export default function MacroSettings() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-12">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
           Daily macros
@@ -204,6 +206,7 @@ export default function MacroSettings() {
               name={meal.name}
               macros={meal.macros}
               macroColors={profile.macroColors}
+              macroStatus={macroStatus}
               onNameChange={(name) => updateMeal(meal.id, { name })}
               onMacrosChange={(macros) => updateMeal(meal.id, { macros })}
             />

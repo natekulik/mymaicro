@@ -3,12 +3,17 @@ type Props = {
   actual: number;
   target: number;
   unit: string;
-  color: string; // CSS color for the fill when within budget — user-customizable, so a raw value rather than a Tailwind class
+  color: string; // CSS color for the fill — user-customizable, so a raw value rather than a Tailwind class
+  // Daily Macros' own summary flags going over target by forcing the bar
+  // and number red, as a warning. Weekly Plan reuses this same component
+  // for its per-day bars but wants to always honor the user's chosen macro
+  // color instead, so that override is opt-in rather than baked in.
+  flagOverTarget?: boolean;
 };
 
-export default function ProgressRow({ label, actual, target, unit, color }: Props) {
+export default function ProgressRow({ label, actual, target, unit, color, flagOverTarget = true }: Props) {
   const pct = target > 0 ? Math.min(100, (actual / target) * 100) : 0;
-  const over = target > 0 && actual > target;
+  const over = flagOverTarget && target > 0 && actual > target;
   const diff = Math.round(actual - target);
 
   return (
