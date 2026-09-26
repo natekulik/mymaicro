@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   type Macro,
   type MacroColors,
@@ -12,6 +12,13 @@ import {
   splitEvenly,
   sumMacros,
 } from "@/lib/macro";
+import {
+  applyMacroPreset,
+  loadMacroPresets,
+  removeMacroPreset,
+  saveMacroPreset,
+  type MacroPreset,
+} from "@/lib/macro-presets";
 import { loadProfile, saveProfile } from "@/lib/storage";
 import MealCard from "./MealCard";
 import NumberField from "./NumberField";
@@ -23,10 +30,19 @@ const MAX_MEALS = 8;
 export default function MacroSettings() {
   const [profile, setProfile] = useState<MacroProfile | null>(null);
   const [colorsOpen, setColorsOpen] = useState(false);
+  // Saved macro presets ("+ Add Macro Preset" / "My Macro Presets") —
+  // reusable daily target + meal-split snapshots, same save/apply pattern
+  // as Plan's weekly presets.
+  const [presets, setPresets] = useState<MacroPreset[]>([]);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  // Two-click confirm for applying a preset, keyed by preset id.
+  const [presetArmedId, setPresetArmedId] = useState<string | null>(null);
 
   // Load once on mount — localStorage doesn't exist during server render.
   useEffect(() => {
     setProfile(loadProfile() ?? defaultProfile());
+    setPresets(loadMacroPresets());
   }, []);
 
   // Autosave on every change.
@@ -89,6 +105,29 @@ export default function MacroSettings() {
     );
   }
 
+  function handleSavePreset(name: string) {
+    if (!profile) return;
+    const preset = saveMacroPreset(name, profile.dailyTarget, profile.meals);
+    setPresets((prev) => [preset, ...prev]);
+    setSaveOpen(false);
+  }
+
+  function handleDeletePreset(id: string) {
+    removeMacroPreset(id);
+    setPresets((prev) => prev.filter((p) => p.id !== id));
+    if (presetArmedId === id) setPresetArmedId(null);
+  }
+
+  function handleApplyPresetClick(preset: MacroPreset) {
+    if (presetArmedId === preset.id) {
+      const applied = applyMacroPreset(preset);
+      setProfile((p) => (p ? { ...p, dailyTarget: applied.dailyTarget, meals: applied.meals } : p));
+      setPresetArmedId(null);
+    } else {
+      setPresetArmedId(preset.id);
+    }
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">
       <header className="flex flex-col gap-1">
@@ -99,6 +138,41 @@ export default function MacroSettings() {
           Set your daily macro targets, then split them across however many meals you eat.
         </p>
       </header>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setSaveOpen((o) => !o);
+              setPresetsOpen(false);
+            }}
+            className="whitespace-nowrap rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            + Add Macro Preset
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPresetsOpen((o) => !o);
+              setSaveOpen(false);
+            }}
+            className="whitespace-nowrap rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            My Macro Presets{presets.length > 0 ? ` (${presets.length})` : ""}
+          </button>
+        </div>
+
+        {saveOpen && <SavePresetPanel onSave={handleSavePreset} onCancel={() => setSaveOpen(false)} />}
+        {presetsOpen && (
+          <PresetListPanel
+            presets={presets}
+            armedId={presetArmedId}
+            onApply={handleApplyPresetClick}
+            onDelete={handleDeletePreset}
+          />
+        )}
+      </div>
 
       {/* Daily target */}
       <section className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
@@ -279,5 +353,117 @@ function ColorPickerField({
       />
       {label}
     </label>
+  );
+}
+
+function SavePresetPanel({
+  onSave,
+  onCancel,
+}: {
+  onSave: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSave(name.trim());
+    setName("");
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="flex flex-col gap-2 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800"
+    >
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        Save your current daily target and meal split as a reusable preset you can apply again
+        later from &quot;My Macro Presets&quot;.
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <input
+          type="text"
+          autoFocus
+          placeholder="Preset name (e.g. Cutting)"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-700 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus:border-zinc-600"
+        />
+        <button
+          type="submit"
+          disabled={!name.trim()}
+          className="whitespace-nowrap rounded-md bg-zinc-700 px-2.5 py-1.5 text-xs font-medium text-white transition hover:bg-zinc-600 disabled:opacity-50 dark:bg-zinc-600 dark:hover:bg-zinc-500"
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="whitespace-nowrap rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function PresetListPanel({
+  presets,
+  armedId,
+  onApply,
+  onDelete,
+}: {
+  presets: MacroPreset[];
+  armedId: string | null;
+  onApply: (preset: MacroPreset) => void;
+  onDelete: (id: string) => void;
+}) {
+  if (presets.length === 0) {
+    return (
+      <div className="rounded-xl bg-zinc-50 p-3 text-xs text-zinc-400 dark:bg-zinc-800">
+        No presets saved yet — use &quot;+ Add Macro Preset&quot; to save your current targets
+        for reuse.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800">
+      {presets.map((preset) => {
+        const armed = armedId === preset.id;
+        return (
+          <div
+            key={preset.id}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 dark:bg-zinc-900"
+          >
+            <span className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-200">
+              {preset.name}
+            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onApply(preset)}
+                className={`whitespace-nowrap rounded-md border px-2.5 py-1 text-xs font-medium transition ${
+                  armed
+                    ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-400"
+                    : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {armed ? "Click again to confirm" : "Apply preset"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(preset.id)}
+                className="text-xs text-zinc-400 transition hover:text-rose-500"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }

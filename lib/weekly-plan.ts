@@ -22,6 +22,10 @@ export type DayPlan = {
   day: string;
   subsections: string[];
   meals: PlannedMeal[];
+  // Which Daily Macros preset (lib/macro-presets.ts) this day's goals should
+  // be measured against — null means "whatever's currently active on Daily
+  // Macros" (the default, and the only option before this existed).
+  macroPresetId: string | null;
 };
 
 export type WeeklyPlan = {
@@ -45,8 +49,19 @@ const WEEK_OVERRIDES_STORAGE_KEY = "mymaicro:weeklyPlanWeeks:v1";
 
 export function defaultWeeklyPlan(): WeeklyPlan {
   return {
-    days: DAY_NAMES.map((day) => ({ day, subsections: [...DEFAULT_SUBSECTIONS], meals: [] })),
+    days: DAY_NAMES.map((day) => ({
+      day,
+      subsections: [...DEFAULT_SUBSECTIONS],
+      meals: [],
+      macroPresetId: null,
+    })),
   };
+}
+
+// Days saved before macro presets existed won't have this field — fill it
+// in rather than let every reader handle `undefined`.
+function normalizeDay(day: DayPlan): DayPlan {
+  return { ...day, macroPresetId: day.macroPresetId ?? null };
 }
 
 export function loadWeeklyPlan(): WeeklyPlan {
@@ -56,7 +71,7 @@ export function loadWeeklyPlan(): WeeklyPlan {
     if (!raw) return defaultWeeklyPlan();
     const parsed = JSON.parse(raw) as WeeklyPlan;
     if (!Array.isArray(parsed?.days) || parsed.days.length === 0) return defaultWeeklyPlan();
-    return parsed;
+    return { days: parsed.days.map(normalizeDay) };
   } catch {
     return defaultWeeklyPlan();
   }
@@ -83,7 +98,12 @@ export function loadWeekOverrides(): WeekOverrides {
     const raw = window.localStorage.getItem(WEEK_OVERRIDES_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as WeekOverrides;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    if (!parsed || typeof parsed !== "object") return {};
+    const normalized: WeekOverrides = {};
+    for (const [weekStart, days] of Object.entries(parsed)) {
+      normalized[weekStart] = days.map(normalizeDay);
+    }
+    return normalized;
   } catch {
     return {};
   }
@@ -100,7 +120,12 @@ export function saveWeekOverrides(overrides: WeekOverrides): void {
 }
 
 function cloneDays(days: DayPlan[]): DayPlan[] {
-  return days.map((d) => ({ ...d, subsections: [...d.subsections], meals: d.meals.map((m) => ({ ...m })) }));
+  return days.map((d) => ({
+    ...d,
+    subsections: [...d.subsections],
+    meals: d.meals.map((m) => ({ ...m })),
+    macroPresetId: d.macroPresetId ?? null,
+  }));
 }
 
 // The days to show/edit for a given week — that week's own override if it's
@@ -172,9 +197,16 @@ export function removeSubsection(days: DayPlan[], day: string, subsection: strin
   );
 }
 
+// Which Daily Macros preset (or null for "whatever's active there") a
+// single day's goals should be measured against.
+export function setDayMacroPreset(days: DayPlan[], day: string, macroPresetId: string | null): DayPlan[] {
+  return days.map((d) => (d.day === day ? { ...d, macroPresetId } : d));
+}
+
 // Overwrites every other day (of this one week) with the source day's
-// subsections + meals — meals get fresh ids so removing a pasted copy
-// later never collides with the source day's own entries.
+// subsections + meals + macro preset selection — meals get fresh ids so
+// removing a pasted copy later never collides with the source day's own
+// entries.
 export function pasteToAllDays(days: DayPlan[], sourceDay: string): DayPlan[] {
   const source = days.find((d) => d.day === sourceDay);
   if (!source) return days;
@@ -185,6 +217,7 @@ export function pasteToAllDays(days: DayPlan[], sourceDay: string): DayPlan[] {
           day: d.day,
           subsections: [...source.subsections],
           meals: source.meals.map((m) => ({ ...m, id: newMealId() })),
+          macroPresetId: source.macroPresetId,
         },
   );
 }
@@ -247,6 +280,7 @@ export function applyPreset(preset: WeeklyPreset): DayPlan[] {
     day: d.day,
     subsections: [...d.subsections],
     meals: d.meals.map((m) => ({ ...m, id: newMealId() })),
+    macroPresetId: d.macroPresetId ?? null,
   }));
 }
 

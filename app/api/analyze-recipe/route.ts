@@ -111,7 +111,8 @@ export async function POST(request: Request) {
     if (!res.ok) {
       return NextResponse.json(
         {
-          error: `The site responded with an error (${res.status}). It may be blocking automated requests.`,
+          error: `This site blocked the request (error ${res.status}) — many recipe sites don't allow automated fetching. Use "Manual Entry" instead and paste in the ingredients yourself.`,
+          blocked: true,
         },
         { status: 502 },
       );
@@ -119,7 +120,10 @@ export async function POST(request: Request) {
     html = await res.text();
   } catch {
     return NextResponse.json(
-      { error: "Couldn't reach that page — check the link, or the site may be blocking requests." },
+      {
+        error: `Couldn't reach that page — check the link, or use "Manual Entry" instead and paste in the ingredients yourself.`,
+        blocked: true,
+      },
       { status: 502 },
     );
   }
@@ -141,7 +145,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "Couldn't find recipe data on that page. Many recipe sites publish machine-readable details, but this one either doesn't or is blocking automated requests.",
+          'Couldn\'t find recipe data on that page — this site either doesn\'t publish it or is blocking automated requests. Use "Manual Entry" instead and paste in the ingredients yourself.',
+        blocked: true,
       },
       { status: 404 },
     );

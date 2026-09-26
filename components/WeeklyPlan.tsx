@@ -16,6 +16,7 @@ import {
   resolveWeekDays,
   saveWeekOverrides,
   saveWeeklyPreset,
+  setDayMacroPreset as setDayMacroPresetInDays,
   sumPlannedMeals,
   type DayPlan,
   type DayTotals,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/weekly-plan";
 import { loadSavedRecipes, type SavedRecipe } from "@/lib/saved-recipes";
 import { loadProfile } from "@/lib/storage";
+import { loadMacroPresets, type MacroPreset } from "@/lib/macro-presets";
 import { DEFAULT_MACRO_COLORS, defaultProfile, type Macro, type MacroColors, type MealSlot } from "@/lib/macro";
 import {
   dateForDayIndexInWeek,
@@ -62,6 +64,9 @@ export default function WeeklyPlan() {
   // so expanding e.g. "Breakfast" can compare against the same "Breakfast"
   // target set on Daily Macros.
   const [mealTargets, setMealTargets] = useState<MealSlot[]>(defaultProfile().meals);
+  // Daily Macros' saved presets — a day can pick one of these instead of
+  // whatever's currently active there (see DayPlan.macroPresetId).
+  const [macroPresets, setMacroPresets] = useState<MacroPreset[]>([]);
   // Which day's subsections are expanded below the day strip — clicking a
   // day pill toggles it open/closed; only one day is open at a time.
   const [openDay, setOpenDay] = useState<string | null>(null);
@@ -96,6 +101,7 @@ export default function WeeklyPlan() {
     setMacroColors(profile?.macroColors ?? DEFAULT_MACRO_COLORS);
     setDailyTarget(profile?.dailyTarget ?? defaultProfile().dailyTarget);
     setMealTargets(profile?.meals ?? defaultProfile().meals);
+    setMacroPresets(loadMacroPresets());
     const todayStr = todayDateString();
     setToday(todayStr);
     setWeekStart(mondayOfDate(todayStr));
@@ -186,6 +192,13 @@ export default function WeeklyPlan() {
   }
 
   const openDayPlan = weekDays.find((d) => d.day === openDay) ?? null;
+  // The selected macro preset for the open day, if any, overrides the
+  // active Daily Macros target/meal-split just for that day's goal bars.
+  const openDayMacroPreset = openDayPlan?.macroPresetId
+    ? (macroPresets.find((p) => p.id === openDayPlan.macroPresetId) ?? null)
+    : null;
+  const effectiveDailyTarget = openDayMacroPreset?.dailyTarget ?? dailyTarget;
+  const effectiveMealTargets = openDayMacroPreset?.meals ?? mealTargets;
   const isCurrentWeek = weekStart === mondayOfDate(today);
   const canUndoPaste = pasteUndoSnapshot !== null && pasteUndoSnapshot.weekStart === weekStart;
   const slideClass =
@@ -228,7 +241,7 @@ export default function WeeklyPlan() {
             }}
             className="whitespace-nowrap rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
           >
-            My Presets{presets.length > 0 ? ` (${presets.length})` : ""}
+            My Weekly Presets{presets.length > 0 ? ` (${presets.length})` : ""}
           </button>
           {canUndoPaste && (
             <button
@@ -344,14 +357,18 @@ export default function WeeklyPlan() {
           day={openDayPlan}
           recipes={recipes}
           totals={dayTotals(openDayPlan, recipes)}
-          dailyTarget={dailyTarget}
-          mealTargets={mealTargets}
+          dailyTarget={effectiveDailyTarget}
+          mealTargets={effectiveMealTargets}
           macroColors={macroColors}
+          macroPresets={macroPresets}
           pasteArmed={pasteArmedDay === openDayPlan.day}
           canUndoPaste={canUndoPaste}
           onClose={() => setOpenDay(null)}
           onPasteClick={() => handlePasteClick(openDayPlan.day)}
           onUndoPaste={handleUndoPaste}
+          onMacroPresetChange={(macroPresetId) =>
+            mutateWeek((days) => setDayMacroPresetInDays(days, openDayPlan.day, macroPresetId))
+          }
           onAddSubsection={(name) => mutateWeek((days) => addSubsectionInDays(days, openDayPlan.day, name))}
           onRemoveSubsection={(subsection) =>
             mutateWeek((days) => removeSubsectionInDays(days, openDayPlan.day, subsection))
@@ -392,11 +409,13 @@ function DayDetail({
   dailyTarget,
   mealTargets,
   macroColors,
+  macroPresets,
   pasteArmed,
   canUndoPaste,
   onClose,
   onPasteClick,
   onUndoPaste,
+  onMacroPresetChange,
   onAddSubsection,
   onRemoveSubsection,
   onAddMeal,
@@ -408,11 +427,13 @@ function DayDetail({
   dailyTarget: Macro;
   mealTargets: MealSlot[];
   macroColors: MacroColors;
+  macroPresets: MacroPreset[];
   pasteArmed: boolean;
   canUndoPaste: boolean;
   onClose: () => void;
   onPasteClick: () => void;
   onUndoPaste: () => void;
+  onMacroPresetChange: (macroPresetId: string | null) => void;
   onAddSubsection: (name: string) => void;
   onRemoveSubsection: (subsection: string) => void;
   onAddMeal: (subsection: string, recipeId: string) => void;
@@ -433,8 +454,23 @@ function DayDetail({
 
   return (
     <section className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{day.day}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{day.day}</h2>
+          <select
+            value={day.macroPresetId ?? ""}
+            onChange={(e) => onMacroPresetChange(e.target.value || null)}
+            aria-label="Macro plan for this day"
+            className="rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-500 outline-none transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+          >
+            <option value="">Macro plan: Active (Daily Macros)</option>
+            {macroPresets.map((preset) => (
+              <option key={preset.id} value={preset.id}>
+                Macro plan: {preset.name}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex items-center gap-2">
           {canUndoPaste && (
             <button
@@ -454,7 +490,7 @@ function DayDetail({
                 : "border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
             }`}
           >
-            {pasteArmed ? "Click again to confirm" : "Paste to all days"}
+            {pasteArmed ? "Click again to confirm" : "Paste to all days in week"}
           </button>
           <button
             type="button"
@@ -579,39 +615,38 @@ function DayDetail({
               )}
 
               {meals.length === 0 ? (
-                <p className="text-xs text-zinc-400">Nothing planned yet.</p>
-              ) : (
-                <ul className="flex flex-col gap-1">
-                  {meals.map((meal) => {
-                    const recipe = recipes.find((r) => r.id === meal.recipeId);
-                    return (
-                      <li
-                        key={meal.id}
-                        className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
-                      >
-                        <span className="truncate">
-                          {recipe ? recipe.title : "Recipe no longer available"}
-                          {recipe && recipe.nutrition.calories != null && (
-                            <span className="ml-1.5 text-zinc-400">
-                              {Math.round(recipe.nutrition.calories)} cals
-                            </span>
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => onRemoveMeal(meal.id)}
-                          className="shrink-0 text-zinc-400 transition hover:text-rose-500"
-                        >
-                          ×
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-
-              {recipes.length > 0 && (
                 <AddRecipeControl recipes={recipes} onAdd={(recipeId) => onAddMeal(subsection, recipeId)} />
+              ) : (
+                <>
+                  <ul className="flex flex-col gap-1">
+                    {meals.map((meal) => {
+                      const recipe = recipes.find((r) => r.id === meal.recipeId);
+                      return (
+                        <li
+                          key={meal.id}
+                          className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                        >
+                          <span className="truncate">
+                            {recipe ? recipe.title : "Recipe no longer available"}
+                            {recipe && recipe.nutrition.calories != null && (
+                              <span className="ml-1.5 text-zinc-400">
+                                {Math.round(recipe.nutrition.calories)} cals
+                              </span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveMeal(meal.id)}
+                            className="shrink-0 text-zinc-400 transition hover:text-rose-500"
+                          >
+                            ×
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <AddRecipeControl recipes={recipes} onAdd={(recipeId) => onAddMeal(subsection, recipeId)} />
+                </>
               )}
             </div>
           );
@@ -665,6 +700,18 @@ function AddRecipeControl({
     );
   }
 
+  if (recipes.length === 0) {
+    return (
+      <p className="text-xs text-zinc-400">
+        No saved recipes yet —{" "}
+        <a href="/my-recipes" className="underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300">
+          save one from My Recipes
+        </a>{" "}
+        first.
+      </p>
+    );
+  }
+
   return (
     <div className="flex items-center gap-1.5">
       <select
@@ -712,7 +759,7 @@ function SavePresetPanel({
     >
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
         Save this week&apos;s full plan — every day, meal, and recipe — as a reusable preset you
-        can drop into any week later from &quot;My Presets&quot;.
+        can drop into any week later from &quot;My Weekly Presets&quot;.
       </p>
       <div className="flex flex-wrap items-center gap-1.5">
         <input

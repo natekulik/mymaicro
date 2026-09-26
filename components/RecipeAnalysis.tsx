@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
 import type {
   IngredientMacroDetail,
   MicroTotals,
@@ -17,6 +17,37 @@ type NutrientView = "macros" | "micros";
 // The everyday-relevant subset shown before the user expands to the full
 // nutrient list — sized to match the 4-card macro grid it sits next to.
 const CONDENSED_MICRO_KEYS = ["sodium", "fiber", "fatSaturated", "cholesterol"];
+
+// What each per-ingredient bar under "How this was calculated" measures —
+// clicking one of the four pill segments switches every bar to that
+// nutrient at once, same accent colors as the Calories/Protein/Carbs/Fat
+// cards above.
+type BarView = "calories" | "protein" | "carbs" | "fat";
+// Order here is also the pill's left-to-right display order.
+const BAR_VIEWS: BarView[] = ["calories", "protein", "carbs", "fat"];
+
+const BAR_VIEW_CONFIG: Record<BarView, { label: string; barColor: string; pillActive: string }> = {
+  calories: {
+    label: "Cals",
+    barColor: "bg-orange-400 dark:bg-orange-500",
+    pillActive: "bg-orange-500 text-white",
+  },
+  protein: {
+    label: "Protein",
+    barColor: "bg-rose-500 dark:bg-rose-500",
+    pillActive: "bg-rose-500 text-white",
+  },
+  carbs: {
+    label: "Carbs",
+    barColor: "bg-amber-500 dark:bg-amber-500",
+    pillActive: "bg-amber-500 text-white",
+  },
+  fat: {
+    label: "Fat",
+    barColor: "bg-sky-500 dark:bg-sky-500",
+    pillActive: "bg-sky-500 text-white",
+  },
+};
 
 // What a variant swap or a quantity recompute overrides on a detail row —
 // merged over the original for both display and total recomputation.
@@ -99,6 +130,10 @@ export default function RecipeAnalysis() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the URL fetch failed because the source site blocks automated
+  // requests (or publishes no machine-readable recipe data) — shows a
+  // one-click way to switch to Manual Entry instead of just the error text.
+  const [errorBlocked, setErrorBlocked] = useState(false);
   const [result, setResult] = useState<RecipeResult | null>(null);
   const [overrides, setOverrides] = useState<Record<number, Override>>({});
   // Keyed by ingredient index — calories (required) and optional
@@ -163,6 +198,7 @@ export default function RecipeAnalysis() {
   async function runAnalyze(endpoint: string, payload: unknown) {
     setLoading(true);
     setError(null);
+    setErrorBlocked(false);
     setResult(null);
     setOverrides({});
     setManualEntries({});
@@ -176,9 +212,10 @@ export default function RecipeAnalysis() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = (await res.json()) as RecipeResult & { error?: string };
+      const data = (await res.json()) as RecipeResult & { error?: string; blocked?: boolean };
       if (!res.ok) {
         setError(data.error ?? "Something went wrong analyzing that.");
+        setErrorBlocked(!!data.blocked);
         return;
       }
       setResult(data);
@@ -209,6 +246,7 @@ export default function RecipeAnalysis() {
   function switchMode(next: Mode) {
     setMode(next);
     setError(null);
+    setErrorBlocked(false);
     setResult(null);
     setOverrides({});
     setManualEntries({});
@@ -531,8 +569,17 @@ export default function RecipeAnalysis() {
       )}
 
       {error && (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
-          {error}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+          <span>{error}</span>
+          {errorBlocked && (
+            <button
+              type="button"
+              onClick={() => switchMode("manual")}
+              className="whitespace-nowrap rounded-full border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100 dark:border-rose-800 dark:text-rose-300 dark:hover:bg-rose-900"
+            >
+              Switch to Manual Entry
+            </button>
+          )}
         </div>
       )}
 
@@ -806,11 +853,43 @@ function IngredientBreakdown({
   onManualMacrosChange: (index: number, macros: { protein: number; carbs: number; fat: number }) => void;
 }) {
   const matched = details.filter((d) => d.grams !== null).length;
-  // Scale for the per-ingredient calorie bars below — each bar is that
-  // ingredient's share of the recipe's total calories, so all the bars
-  // (if you added their widths up) sum to one full bar, not just "how big
-  // is this one next to the single biggest ingredient."
+  // Which nutrient every per-ingredient bar below currently measures —
+  // see BAR_VIEW_CONFIG above.
+  const [barView, setBarView] = useState<BarView>("calories");
+  // "View All Macros" replaces each ingredient's single dynamic bar with
+  // three skinny protein/carbs/fat bars at once, ignoring `barView` until
+  // toggled back off.
+  const [showAllMacros, setShowAllMacros] = useState(false);
+  // Scale for the per-ingredient bars below — each bar is that
+  // ingredient's share of the recipe's total for whatever nutrient it's
+  // showing, so all the bars (if you added their widths up) sum to one
+  // full bar, not just "how big is this one next to the single biggest
+  // ingredient."
   const totalCalories = details.reduce((sum, d) => sum + (d.macros?.calories ?? 0), 0);
+  const totalProtein = details.reduce((sum, d) => sum + (d.macros?.protein ?? 0), 0);
+  const totalCarbs = details.reduce((sum, d) => sum + (d.macros?.carbs ?? 0), 0);
+  const totalFat = details.reduce((sum, d) => sum + (d.macros?.fat ?? 0), 0);
+  const barTotals: Record<BarView, number> = {
+    calories: totalCalories,
+    protein: totalProtein,
+    carbs: totalCarbs,
+    fat: totalFat,
+  };
+
+  // The pill and the "View All Macros" button sit inside <summary> —
+  // without stopping the event here, clicking either would also trigger
+  // the native details open/close toggle.
+  function handleBarViewClick(view: BarView, e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setBarView(view);
+  }
+
+  function handleToggleAllMacros(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowAllMacros((v) => !v);
+  }
 
   // Attention-needed ingredients (an unfilled amount, or an unconfirmed
   // "which kind?") float to the top; everything else stays in the order it
@@ -841,11 +920,39 @@ function IngredientBreakdown({
       className="group rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
     >
       <summary className="cursor-pointer list-none text-sm font-semibold text-zinc-900 marker:content-none dark:text-zinc-50">
-        <span className="inline-flex items-center gap-1.5">
+        <span className="inline-flex flex-wrap items-center gap-1.5">
           How this was calculated
           <span className="text-xs font-normal text-zinc-400">
             ({matched}/{details.length} ingredients matched)
           </span>
+          <span className="inline-flex items-center gap-0.5 rounded-full border border-zinc-200 p-0.5 dark:border-zinc-700">
+            {BAR_VIEWS.map((view) => (
+              <button
+                key={view}
+                type="button"
+                onClick={(e) => handleBarViewClick(view, e)}
+                disabled={showAllMacros}
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition disabled:opacity-40 ${
+                  barView === view && !showAllMacros
+                    ? BAR_VIEW_CONFIG[view].pillActive
+                    : "text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                }`}
+              >
+                {BAR_VIEW_CONFIG[view].label}
+              </button>
+            ))}
+          </span>
+          <button
+            type="button"
+            onClick={handleToggleAllMacros}
+            className={`whitespace-nowrap rounded-full border px-2.5 py-1 text-[10px] font-medium transition ${
+              showAllMacros
+                ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900"
+                : "border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            }`}
+          >
+            View All Macros
+          </button>
           <svg
             className="h-3.5 w-3.5 text-zinc-400 transition group-open:rotate-180"
             viewBox="0 0 12 12"
@@ -862,67 +969,117 @@ function IngredientBreakdown({
         </span>
       </summary>
       <ul className="mt-3 flex flex-col gap-3 text-xs">
-        {ordered.map(({ d, i }) => (
-          <li
-            key={i}
-            className="flex flex-col gap-1.5 border-t border-zinc-100 pt-3 first:border-t-0 first:pt-0 dark:border-zinc-800"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-zinc-600 dark:text-zinc-300">{d.raw}</span>
-              <StatusBadge detail={d} manualEntry={manualEntries[i]} />
-            </div>
-            {d.matchedDescription && !d.needsQuantity && (
-              <span className="text-zinc-400">
-                matched: {d.matchedDescription}
-                {d.grams !== null && <> — {Math.round(d.grams)}g</>}
-                {d.matchSource &&
-                  ` (${d.matchSource === "foundation" ? "USDA Foundation" : "USDA SR Legacy"})`}
-              </span>
-            )}
-
-            {d.macros?.calories != null && (
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-                  <div
-                    className="h-full rounded-full bg-orange-400 dark:bg-orange-500"
-                    style={{
-                      width: `${totalCalories > 0 ? (d.macros.calories / totalCalories) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-                <span className="whitespace-nowrap text-zinc-400">
-                  {Math.round(d.macros.calories)} cals
-                </span>
+        {ordered.map(({ d, i }) => {
+          const barValue = d.macros?.[barView] ?? null;
+          const barTotal = barTotals[barView];
+          const barUnitLabel = barView === "calories" ? "cals" : `g ${BAR_VIEW_CONFIG[barView].label.toLowerCase()}`;
+          return (
+            <li
+              key={i}
+              className="flex flex-col gap-1.5 border-t border-zinc-100 pt-3 first:border-t-0 first:pt-0 dark:border-zinc-800"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-zinc-600 dark:text-zinc-300">{d.raw}</span>
+                <StatusBadge detail={d} manualEntry={manualEntries[i]} />
               </div>
-            )}
+              {d.matchedDescription && !d.needsQuantity && (
+                <span className="text-zinc-400">
+                  matched: {d.matchedDescription}
+                  {d.grams !== null && <> — {Math.round(d.grams)}g</>}
+                  {d.matchSource &&
+                    ` (${d.matchSource === "foundation" ? "USDA Foundation" : "USDA SR Legacy"})`}
+                </span>
+              )}
 
-            {d.variantOptions.length > 0 && (
-              <VariantPicker
-                detail={d}
-                confirmed={!!confirmedVariants[i]}
-                onChange={(variant) => onVariantChange(i, variant)}
-                onConfirm={() => onVariantConfirm(i)}
-              />
-            )}
+              {showAllMacros ? (
+                d.macros && (
+                  <AllMacrosBars
+                    macros={d.macros}
+                    totals={{ protein: totalProtein, carbs: totalCarbs, fat: totalFat }}
+                  />
+                )
+              ) : (
+                barValue != null && (
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+                      <div
+                        className={`h-full rounded-full ${BAR_VIEW_CONFIG[barView].barColor}`}
+                        style={{
+                          width: `${barTotal > 0 ? (barValue / barTotal) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="whitespace-nowrap text-zinc-400">
+                      {Math.round(barValue)} {barUnitLabel}
+                    </span>
+                  </div>
+                )
+              )}
 
-            {d.needsQuantity && (
-              <QuantityPrompt
-                detail={d}
-                onResolved={(grams, macros, micros) => onQuantityResolved(i, grams, macros, micros)}
-              />
-            )}
+              {d.variantOptions.length > 0 && (
+                <VariantPicker
+                  detail={d}
+                  confirmed={!!confirmedVariants[i]}
+                  onChange={(variant) => onVariantChange(i, variant)}
+                  onConfirm={() => onVariantConfirm(i)}
+                />
+              )}
 
-            {isUnmatched(d) && (
-              <ManualCaloriesPrompt
-                savedEntry={manualEntries[i]}
-                onSaveCalories={(calories) => onManualCaloriesChange(i, calories)}
-                onSaveMacros={(macros) => onManualMacrosChange(i, macros)}
-              />
-            )}
-          </li>
-        ))}
+              {d.needsQuantity && (
+                <QuantityPrompt
+                  detail={d}
+                  onResolved={(grams, macros, micros) => onQuantityResolved(i, grams, macros, micros)}
+                />
+              )}
+
+              {isUnmatched(d) && (
+                <ManualCaloriesPrompt
+                  savedEntry={manualEntries[i]}
+                  onSaveCalories={(calories) => onManualCaloriesChange(i, calories)}
+                  onSaveMacros={(macros) => onManualMacrosChange(i, macros)}
+                />
+              )}
+            </li>
+          );
+        })}
       </ul>
     </details>
+  );
+}
+
+// "View All Macros" mode — three skinny bars in place of the single
+// dynamic one, so an ingredient's protein/carbs/fat show at a glance
+// without needing the pill to switch between them.
+function AllMacrosBars({
+  macros,
+  totals,
+}: {
+  macros: NutritionMacro;
+  totals: { protein: number; carbs: number; fat: number };
+}) {
+  const rows: ("protein" | "carbs" | "fat")[] = ["protein", "carbs", "fat"];
+  return (
+    <div className="flex flex-col gap-1">
+      {rows.map((key) => {
+        const value = macros[key];
+        if (value == null) return null;
+        const total = totals[key];
+        return (
+          <div key={key} className="flex items-center gap-2">
+            <span className="w-12 shrink-0 text-[9px] font-medium text-zinc-400">
+              {BAR_VIEW_CONFIG[key].label}
+            </span>
+            <div className="h-1 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+              <div
+                className={`h-full rounded-full ${BAR_VIEW_CONFIG[key].barColor}`}
+                style={{ width: `${total > 0 ? (value / total) * 100 : 0}%` }}
+              />
+            </div>
+            <span className="whitespace-nowrap text-[10px] text-zinc-400">{Math.round(value)} g</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
