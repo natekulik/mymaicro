@@ -134,7 +134,7 @@ export default function MacroSettings() {
               onChange={(v) => updateMacroColor("fat", v)}
             />
             <p className="text-xs text-zinc-400">
-              These colors also show up on your Weekly Plan.
+              These colors also show up on your Maicro Plan.
             </p>
           </div>
         )}

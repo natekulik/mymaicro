@@ -2,10 +2,10 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  loadWeeklyPlan,
   sumPlannedMeals,
   type DayTotals,
   type PlannedMeal,
+  type WeekOverrides,
   type WeeklyPlan as WeeklyPlanData,
 } from "@/lib/weekly-plan";
 import {
@@ -22,9 +22,8 @@ import {
   type HistoryDay,
   type HistoryLog,
 } from "@/lib/history";
-import { loadSavedRecipes, type SavedRecipe } from "@/lib/saved-recipes";
-import { loadProfile } from "@/lib/storage";
-import { DEFAULT_MACRO_COLORS, defaultProfile, type Macro, type MacroColors } from "@/lib/macro";
+import type { SavedRecipe } from "@/lib/saved-recipes";
+import type { Macro, MacroColors } from "@/lib/macro";
 import ProgressRow from "./ProgressRow";
 
 const MONTH_NAMES = [
@@ -43,24 +42,32 @@ const MONTH_NAMES = [
 ];
 const WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export default function HistoricalPlan() {
-  const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlanData | null>(null);
+// Reads the same live plan data Weekly Plan itself holds (its default
+// template, per-week overrides, saved recipes, and Daily Macros settings)
+// as props rather than loading its own copy — this is embedded directly
+// on the Weekly Plan page now, so a day edited via the pill-based editor
+// above must show up down here immediately, not just after a reload.
+export default function HistoricalPlan({
+  template,
+  weekOverrides,
+  recipes,
+  macroColors,
+  dailyTarget,
+}: {
+  template: WeeklyPlanData;
+  weekOverrides: WeekOverrides;
+  recipes: SavedRecipe[];
+  macroColors: MacroColors;
+  dailyTarget: Macro;
+}) {
   const [historyLog, setHistoryLog] = useState<HistoryLog | null>(null);
-  const [recipes, setRecipes] = useState<SavedRecipe[]>([]);
-  const [macroColors, setMacroColors] = useState<MacroColors>(DEFAULT_MACRO_COLORS);
-  const [dailyTarget, setDailyTarget] = useState<Macro>(defaultProfile().dailyTarget);
   const [today, setToday] = useState<string | null>(null);
   const [year, setYear] = useState<number | null>(null);
   const [month, setMonth] = useState<number | null>(null); // 0-11
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    setWeeklyPlan(loadWeeklyPlan());
     setHistoryLog(loadHistoryLog());
-    setRecipes(loadSavedRecipes());
-    const profile = loadProfile();
-    setMacroColors(profile?.macroColors ?? DEFAULT_MACRO_COLORS);
-    setDailyTarget(profile?.dailyTarget ?? defaultProfile().dailyTarget);
     const now = new Date();
     setToday(todayDateString());
     setYear(now.getFullYear());
@@ -71,11 +78,11 @@ export default function HistoricalPlan() {
     if (historyLog) saveHistoryLog(historyLog);
   }, [historyLog]);
 
-  const ready = weeklyPlan && historyLog && today !== null && year !== null && month !== null;
+  const ready = historyLog !== null && today !== null && year !== null && month !== null;
 
   if (!ready) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">
+      <div className="flex items-center justify-center py-8 text-sm text-zinc-400">
         Loading your history…
       </div>
     );
@@ -115,21 +122,13 @@ export default function HistoricalPlan() {
   ];
   while (cells.length % 7 !== 0) cells.push(null);
 
-  const selectedDay = selectedDate ? resolveHistoryDay(historyLog, selectedDate, weeklyPlan) : null;
+  const selectedDay = selectedDate
+    ? resolveHistoryDay(historyLog, selectedDate, template, weekOverrides)
+    : null;
   const selectedTotals = selectedDay ? sumPlannedMeals(selectedDay.meals, recipes) : null;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Historical plan
-        </h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          See what was actually planned on past days, sourced from your Weekly Plan. Click a day
-          to view or edit it.
-        </p>
-      </header>
-
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2 rounded-full border border-zinc-200 px-1 dark:border-zinc-800">
           <button
@@ -184,7 +183,9 @@ export default function HistoricalPlan() {
             const isFuture = dateStr > today;
             const isToday = dateStr === today;
             const isSelected = selectedDate === dateStr;
-            const dayData = !isFuture ? resolveHistoryDay(historyLog, dateStr, weeklyPlan) : null;
+            const dayData = !isFuture
+              ? resolveHistoryDay(historyLog, dateStr, template, weekOverrides)
+              : null;
             const totals = dayData ? sumPlannedMeals(dayData.meals, recipes) : null;
             return (
               <button
@@ -203,9 +204,9 @@ export default function HistoricalPlan() {
                 <span className="text-xs font-bold">{dayNum}</span>
                 {totals && (
                   <span
-                    className={`text-[9px] ${isSelected ? "text-zinc-300 dark:text-zinc-600" : "text-zinc-400"}`}
+                    className={`whitespace-nowrap text-[9px] ${isSelected ? "text-zinc-300 dark:text-zinc-600" : "text-zinc-400"}`}
                   >
-                    {Math.round(totals.calories)}
+                    {Math.round(totals.calories)} cals
                   </span>
                 )}
               </button>

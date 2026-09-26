@@ -1,13 +1,20 @@
-// Local persistence for the "what actually happened" historical log —
-// per-calendar-date overrides layered on top of the Weekly Plan's
-// recurring day-of-week template. A date with no override just mirrors
-// its day-of-week's current template, computed live rather than
-// snapshotted — editing a date for the first time captures its
-// then-current state as an explicit override from that point on, so later
-// edits to the Weekly Plan template don't retroactively change a day the
-// user has already logged/edited.
+// Local persistence for the "what actually happened" historical log — the
+// most specific of three layers: a per-calendar-date override here beats
+// that date's week-specific plan (lib/weekly-plan.ts's WeekOverrides),
+// which in turn beats the Weekly Plan's recurring default template. A date
+// with no override just mirrors whatever its week resolves to, computed
+// live rather than snapshotted — editing a date for the first time
+// captures its then-current state as an explicit override from that point
+// on, so later edits upstream (that week, or the template) don't
+// retroactively change a day the user has already logged/edited.
 
-import type { PlannedMeal, WeeklyPlan } from "./weekly-plan";
+import {
+  DAY_NAMES,
+  resolveWeekDays,
+  type PlannedMeal,
+  type WeekOverrides,
+  type WeeklyPlan,
+} from "./weekly-plan";
 
 export type HistoryDay = {
   date: string; // "YYYY-MM-DD"
@@ -83,17 +90,64 @@ export function formatDisplayDate(dateStr: string): string {
   });
 }
 
-// The day as it should display for `date` — an explicit override if the
-// user has edited it, otherwise a live read of that date's day-of-week
-// template from the Weekly Plan.
-export function resolveHistoryDay(log: HistoryLog, date: string, plan: WeeklyPlan): HistoryDay {
+// Short "Nov 24" form — for date labels above the Weekly Plan pills and
+// the "week of" range below.
+export function formatShortDate(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function addDays(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const shifted = new Date(y, m - 1, d + delta);
+  return formatDate(shifted.getFullYear(), shifted.getMonth(), shifted.getDate());
+}
+
+// The Monday ("YYYY-MM-DD") of the week containing `dateStr` — weeks are
+// Monday-first throughout this app, matching DAY_NAMES / the day pill
+// order.
+export function mondayOfDate(dateStr: string): string {
+  const index = DAY_NAMES.indexOf(dayNameForDate(dateStr)); // 0=Monday..6=Sunday
+  return addDays(dateStr, -index);
+}
+
+export function shiftWeek(weekStart: string, deltaWeeks: number): string {
+  return addDays(weekStart, deltaWeeks * 7);
+}
+
+// The actual date for the Nth day (0=Monday..6=Sunday) of the week
+// starting at `weekStart`.
+export function dateForDayIndexInWeek(weekStart: string, dayIndex: number): string {
+  return addDays(weekStart, dayIndex);
+}
+
+export function formatWeekRangeLabel(weekStart: string): string {
+  const weekEnd = addDays(weekStart, 6);
+  const [ys] = weekStart.split("-").map(Number);
+  const [ye] = weekEnd.split("-").map(Number);
+  const startLabel = formatShortDate(weekStart);
+  const endLabel = formatShortDate(weekEnd);
+  return ys === ye ? `${startLabel} – ${endLabel}, ${ye}` : `${startLabel}, ${ys} – ${endLabel}, ${ye}`;
+}
+
+// The day as it should display for `date`: an explicit history override if
+// the user has edited that exact date, otherwise whatever its week
+// resolves to (that week's own override, or the default template) via
+// lib/weekly-plan.ts's resolveWeekDays.
+export function resolveHistoryDay(
+  log: HistoryLog,
+  date: string,
+  template: WeeklyPlan,
+  weekOverrides: WeekOverrides,
+): HistoryDay {
   const override = log.overrides[date];
   if (override) return override;
-  const template = plan.days.find((d) => d.day === dayNameForDate(date));
+  const weekDays = resolveWeekDays(mondayOfDate(date), template, weekOverrides);
+  const dayPlan = weekDays.find((d) => d.day === dayNameForDate(date));
   return {
     date,
-    subsections: template ? [...template.subsections] : [],
-    meals: template ? template.meals.map((m) => ({ ...m })) : [],
+    subsections: dayPlan ? [...dayPlan.subsections] : [],
+    meals: dayPlan ? dayPlan.meals.map((m) => ({ ...m })) : [],
   };
 }
 

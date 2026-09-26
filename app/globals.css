@@ -41,3 +41,39 @@ body {
 .animate-save-ring {
   animation: save-ring 650ms ease-out;
 }
+
+/* Weekly Plan's week-nav content (label + day pills) replays one of these
+   once each time the viewed week changes — paired with a `key={weekStart}`
+   on that block so React remounts a fresh element for the animation to
+   play against, same trick as .animate-save-ring above. Direction matches
+   travel: going to a later week slides the new content in from the right,
+   an earlier week from the left. */
+@keyframes week-slide-in-right {
+  0% {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes week-slide-in-left {
+  0% {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-week-slide-next {
+  animation: week-slide-in-right 220ms ease-out;
+}
+
+.animate-week-slide-prev {
+  animation: week-slide-in-left 220ms ease-out;
+}

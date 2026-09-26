@@ -12,8 +12,7 @@ const TABS = [
   { href: "/", label: "Daily Macros", short: "Macros" },
   { href: "/recipe-analysis", label: "Macro & Micro Analysis", short: "Analysis" },
   { href: "/my-recipes", label: "My Recipes", short: "Recipes" },
-  { href: "/weekly-plan", label: "Weekly Plan", short: "Weekly" },
-  { href: "/historical-plan", label: "Historical Plan", short: "History" },
+  { href: "/weekly-plan", label: "Plan", short: "Plan" },
 ];
 
 export default function NavTabs() {
