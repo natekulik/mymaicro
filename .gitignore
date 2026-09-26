@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# USDA source downloads — large, easily regenerated with
+# `node scripts/import-usda.mjs`. The built data/usda/foods.db it produces
+# IS committed — that's the actual runtime artifact the app queries.
+/data/usda/raw/
+/data/usda/extracted/
+/data/usda/foods.db-shm
+/data/usda/foods.db-wal
