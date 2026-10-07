@@ -177,7 +177,7 @@ export default function MyRecipes() {
         </p>
       )}
 
-      <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {visibleRecipes.map((recipe) => (
           <RecipeCard
             key={recipe.id}
@@ -259,7 +259,7 @@ function RecipeCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3">
         <MiniStat label="Calories" value={recipe.nutrition.calories} unit="cals" />
         <MiniStat label="Protein" value={recipe.nutrition.protein} unit="g" accent="bg-rose-500" />
         <MiniStat label="Carbs" value={recipe.nutrition.carbs} unit="g" accent="bg-amber-500" />
@@ -309,7 +309,7 @@ function RecipeCard({
             <h3 className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
               Micros (per serving)
             </h3>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3">
               {MICRO_NUTRIENTS.map((def) => {
                 const value = recipe.micros[def.key] ?? null;
                 return (
