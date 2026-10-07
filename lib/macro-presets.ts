@@ -5,7 +5,7 @@
 // applied back onto the profile later.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 import { newId, type Macro, type MealSlot } from "./macro";
 
 export type MacroPreset = {
@@ -46,17 +46,18 @@ export async function loadMacroPresets(): Promise<MacroPreset[]> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("macro_presets")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
+  assertNoError(error);
 
   if (data && data.length > 0) return (data as PresetRow[]).map(fromRow);
 
   const legacy = loadLegacyPresets();
   if (legacy.length > 0) {
-    await supabase.from("macro_presets").insert(
+    const { error: seedError } = await supabase.from("macro_presets").insert(
       legacy.map((p) => ({
         id: p.id,
         user_id: userId,
@@ -66,6 +67,7 @@ export async function loadMacroPresets(): Promise<MacroPreset[]> {
         meals: p.meals,
       })),
     );
+    assertNoError(seedError);
   }
   return legacy;
 }
@@ -81,7 +83,7 @@ export async function saveMacroPreset(name: string, dailyTarget: Macro, meals: M
     dailyTarget: { ...dailyTarget },
     meals: meals.map((m) => ({ ...m, macros: { ...m.macros } })),
   };
-  await supabase.from("macro_presets").insert({
+  const { error } = await supabase.from("macro_presets").insert({
     id: preset.id,
     user_id: userId,
     name: preset.name,
@@ -89,13 +91,15 @@ export async function saveMacroPreset(name: string, dailyTarget: Macro, meals: M
     daily_target: preset.dailyTarget,
     meals: preset.meals,
   });
+  assertNoError(error);
   return preset;
 }
 
 export async function removeMacroPreset(id: string): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase.from("macro_presets").delete().eq("id", id).eq("user_id", userId);
+  const { error } = await supabase.from("macro_presets").delete().eq("id", id).eq("user_id", userId);
+  assertNoError(error);
 }
 
 // The daily target + meals to drop onto the profile when applying a preset

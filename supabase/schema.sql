@@ -246,3 +246,25 @@ $$;
 
 revoke execute on function public.get_username_by_email(text) from public;
 grant execute on function public.get_username_by_email(text) to service_role;
+
+-- ============================================================
+-- Grants — RLS policies only restrict which ROWS a role can see once it
+-- already has table-level access; without these, every query fails with
+-- "permission denied for table ..." before RLS ever gets a say. Supabase's
+-- dashboard table creator adds these automatically, but tables created via
+-- raw SQL (like this whole file) don't get them for free. Only
+-- `authenticated` needs access — the whole app requires login, so `anon`
+-- should never be touching these tables.
+-- ============================================================
+grant usage on schema public to authenticated;
+
+grant select, insert, update, delete on table public.profiles to authenticated;
+grant select, insert, update, delete on table public.macro_profiles to authenticated;
+grant select, insert, update, delete on table public.weekly_plan_templates to authenticated;
+grant select, insert, update, delete on table public.weekly_plan_week_overrides to authenticated;
+grant select, insert, update, delete on table public.history_log to authenticated;
+grant select, insert, update, delete on table public.weekly_presets to authenticated;
+grant select, insert, update, delete on table public.macro_presets to authenticated;
+grant select, insert, update, delete on table public.saved_recipes to authenticated;
+grant select, insert, update, delete on table public.recipe_groups to authenticated;
+grant select, insert, update, delete on table public.recipe_group_assignments to authenticated;

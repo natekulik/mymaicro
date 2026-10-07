@@ -5,7 +5,7 @@
 // matching/variant/quantity machinery replayed later.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 import type { MicroTotals, NutritionMacro } from "./recipe-types";
 
 export type SavedRecipe = {
@@ -75,17 +75,19 @@ export async function loadSavedRecipes(): Promise<SavedRecipe[]> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("saved_recipes")
     .select("*")
     .eq("user_id", userId)
     .order("saved_at", { ascending: false });
+  assertNoError(error);
 
   if (data && data.length > 0) return (data as RecipeRow[]).map(fromRow);
 
   const legacy = loadLegacyRecipes();
   if (legacy.length > 0) {
-    await supabase.from("saved_recipes").insert(legacy.map((r) => toRow(r, userId)));
+    const { error: seedError } = await supabase.from("saved_recipes").insert(legacy.map((r) => toRow(r, userId)));
+    assertNoError(seedError);
   }
   return legacy;
 }
@@ -98,14 +100,16 @@ export async function saveRecipe(recipe: Omit<SavedRecipe, "id" | "savedAt">): P
     id: `recipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     savedAt: new Date().toISOString(),
   };
-  await supabase.from("saved_recipes").insert(toRow(saved, userId));
+  const { error } = await supabase.from("saved_recipes").insert(toRow(saved, userId));
+  assertNoError(error);
   return saved;
 }
 
 export async function removeSavedRecipe(id: string): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase.from("saved_recipes").delete().eq("id", id).eq("user_id", userId);
+  const { error } = await supabase.from("saved_recipes").delete().eq("id", id).eq("user_id", userId);
+  assertNoError(error);
 }
 
 // Overwrites an existing saved recipe in place (same id, so its position
@@ -119,12 +123,13 @@ export async function updateSavedRecipe(
   const supabase = createClient();
   const userId = await requireUserId(supabase);
   const updated: SavedRecipe = { ...patch, id, savedAt: new Date().toISOString() };
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("saved_recipes")
     .update(toRow(updated, userId))
     .eq("id", id)
     .eq("user_id", userId)
     .select("id");
+  assertNoError(error);
   if (!data || data.length === 0) return null;
   return updated;
 }

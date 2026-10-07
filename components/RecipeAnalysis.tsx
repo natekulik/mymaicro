@@ -160,6 +160,9 @@ export default function RecipeAnalysis() {
   // True right after "Add to My Recipes" is clicked for the current
   // result — just for the button's brief "Saved ✓" feedback.
   const [justSaved, setJustSaved] = useState(false);
+  // Set when saving to My Recipes itself fails (a Supabase write error) —
+  // distinct from `error` above, which is about analyzing the recipe.
+  const [saveError, setSaveError] = useState<string | null>(null);
   // Set when this analysis was opened via "Edit Recipe" from My Recipes —
   // the id of the saved recipe being edited, so the save button updates it
   // in place instead of creating a new one. Cleared by switchMode, since
@@ -423,6 +426,7 @@ export default function RecipeAnalysis() {
   // rather than the live analyze state.
   async function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
+    setSaveError(null);
     const patch = {
       title: result.title,
       sourceUrl: result.sourceUrl,
@@ -431,12 +435,20 @@ export default function RecipeAnalysis() {
       micros,
       ingredients: result.ingredients,
     };
-    if (editingRecipeId) {
-      await updateSavedRecipe(editingRecipeId, patch);
-    } else {
-      await saveRecipe(patch);
+    try {
+      if (editingRecipeId) {
+        const updated = await updateSavedRecipe(editingRecipeId, patch);
+        if (!updated) {
+          setSaveError("Couldn't find that recipe to update — it may have been removed elsewhere.");
+          return;
+        }
+      } else {
+        await saveRecipe(patch);
+      }
+      setJustSaved(true);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Something went wrong saving that recipe.");
     }
-    setJustSaved(true);
   }
 
   return (
@@ -568,6 +580,12 @@ export default function RecipeAnalysis() {
             />
           </div>
         </form>
+      )}
+
+      {saveError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+          Couldn&apos;t save that recipe: {saveError}
+        </div>
       )}
 
       {error && (

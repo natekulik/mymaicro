@@ -13,7 +13,7 @@
 // storage, so it's unchanged from before accounts existed.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 import type { SavedRecipe } from "./saved-recipes";
 
 export type PlannedMeal = {
@@ -86,7 +86,12 @@ export async function loadWeeklyPlan(): Promise<WeeklyPlan> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase.from("weekly_plan_templates").select("data").eq("user_id", userId).maybeSingle();
+  const { data, error } = await supabase
+    .from("weekly_plan_templates")
+    .select("data")
+    .eq("user_id", userId)
+    .maybeSingle();
+  assertNoError(error);
   if (data) {
     const plan = data.data as WeeklyPlan;
     return { days: plan.days.map(normalizeDay) };
@@ -100,9 +105,10 @@ export async function loadWeeklyPlan(): Promise<WeeklyPlan> {
 export async function saveWeeklyPlan(plan: WeeklyPlan): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase
+  const { error } = await supabase
     .from("weekly_plan_templates")
     .upsert({ user_id: userId, data: plan, updated_at: new Date().toISOString() });
+  assertNoError(error);
 }
 
 // Keyed by that week's Monday, "YYYY-MM-DD" (see lib/history.ts's
@@ -131,11 +137,12 @@ export async function loadWeekOverrides(): Promise<WeekOverrides> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("weekly_plan_week_overrides")
     .select("data")
     .eq("user_id", userId)
     .maybeSingle();
+  assertNoError(error);
   if (data) {
     const raw = data.data as WeekOverrides;
     const normalized: WeekOverrides = {};
@@ -153,9 +160,10 @@ export async function loadWeekOverrides(): Promise<WeekOverrides> {
 export async function saveWeekOverrides(overrides: WeekOverrides): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase
+  const { error } = await supabase
     .from("weekly_plan_week_overrides")
     .upsert({ user_id: userId, data: overrides, updated_at: new Date().toISOString() });
+  assertNoError(error);
 }
 
 function cloneDays(days: DayPlan[]): DayPlan[] {
@@ -294,19 +302,21 @@ export async function loadWeeklyPresets(): Promise<WeeklyPreset[]> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("weekly_presets")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
+  assertNoError(error);
 
   if (data && data.length > 0) return (data as PresetRow[]).map(fromPresetRow);
 
   const legacy = loadLegacyWeeklyPresets();
   if (legacy.length > 0) {
-    await supabase
+    const { error: seedError } = await supabase
       .from("weekly_presets")
       .insert(legacy.map((p) => ({ id: p.id, user_id: userId, name: p.name, created_at: p.createdAt, days: p.days })));
+    assertNoError(seedError);
   }
   return legacy;
 }
@@ -320,16 +330,18 @@ export async function saveWeeklyPreset(name: string, days: DayPlan[]): Promise<W
     createdAt: new Date().toISOString(),
     days: cloneDays(days),
   };
-  await supabase
+  const { error } = await supabase
     .from("weekly_presets")
     .insert({ id: preset.id, user_id: userId, name: preset.name, created_at: preset.createdAt, days: preset.days });
+  assertNoError(error);
   return preset;
 }
 
 export async function removeWeeklyPreset(id: string): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase.from("weekly_presets").delete().eq("id", id).eq("user_id", userId);
+  const { error } = await supabase.from("weekly_presets").delete().eq("id", id).eq("user_id", userId);
+  assertNoError(error);
 }
 
 // The days to drop onto a week when applying a preset — a fresh copy with

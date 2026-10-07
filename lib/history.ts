@@ -9,7 +9,7 @@
 // retroactively change a day the user has already logged/edited.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 import {
   DAY_NAMES,
   resolveWeekDays,
@@ -46,7 +46,8 @@ export async function loadHistoryLog(): Promise<HistoryLog> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase.from("history_log").select("data").eq("user_id", userId).maybeSingle();
+  const { data, error } = await supabase.from("history_log").select("data").eq("user_id", userId).maybeSingle();
+  assertNoError(error);
   if (data) return data.data as HistoryLog;
 
   const legacy = loadLegacyHistoryLog();
@@ -57,7 +58,10 @@ export async function loadHistoryLog(): Promise<HistoryLog> {
 export async function saveHistoryLog(log: HistoryLog): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase.from("history_log").upsert({ user_id: userId, data: log, updated_at: new Date().toISOString() });
+  const { error } = await supabase
+    .from("history_log")
+    .upsert({ user_id: userId, data: log, updated_at: new Date().toISOString() });
+  assertNoError(error);
 }
 
 const JS_WEEKDAY_TO_DAY_NAME = [

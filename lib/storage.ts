@@ -5,7 +5,7 @@
 // this device gets silently dropped when they log in for the first time.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 import { DEFAULT_MACRO_COLORS, defaultProfile, type MacroProfile } from "./macro";
 
 const LEGACY_STORAGE_KEY = "mymaicro:profile:v1";
@@ -29,7 +29,8 @@ export async function loadProfile(): Promise<MacroProfile> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase.from("macro_profiles").select("data").eq("user_id", userId).maybeSingle();
+  const { data, error } = await supabase.from("macro_profiles").select("data").eq("user_id", userId).maybeSingle();
+  assertNoError(error);
   if (data) {
     const profile = data.data as MacroProfile;
     return { ...profile, macroColors: { ...DEFAULT_MACRO_COLORS, ...profile.macroColors } };
@@ -43,7 +44,8 @@ export async function loadProfile(): Promise<MacroProfile> {
 export async function saveProfile(profile: MacroProfile): Promise<void> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
-  await supabase
+  const { error } = await supabase
     .from("macro_profiles")
     .upsert({ user_id: userId, data: profile, updated_at: new Date().toISOString() });
+  assertNoError(error);
 }

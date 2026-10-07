@@ -6,7 +6,7 @@
 // recipe_group_assignments.
 
 import { createClient } from "./supabase/client";
-import { requireUserId } from "./supabase/user";
+import { assertNoError, requireUserId } from "./supabase/user";
 
 export type RecipeGroup = {
   id: string;
@@ -51,11 +51,12 @@ export async function loadRecipeGroups(): Promise<RecipeGroup[]> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("recipe_groups")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: true });
+  assertNoError(error);
 
   if (data && data.length > 0) {
     return (data as GroupRow[]).map((row) => ({ id: row.id, name: row.name, createdAt: row.created_at }));
@@ -63,9 +64,10 @@ export async function loadRecipeGroups(): Promise<RecipeGroup[]> {
 
   const legacy = loadLegacyGroups();
   if (legacy.length > 0) {
-    await supabase
+    const { error: seedError } = await supabase
       .from("recipe_groups")
       .insert(legacy.map((g) => ({ id: g.id, user_id: userId, name: g.name, created_at: g.createdAt })));
+    assertNoError(seedError);
   }
   return legacy;
 }
@@ -78,9 +80,10 @@ export async function addRecipeGroup(name: string): Promise<RecipeGroup> {
     name,
     createdAt: new Date().toISOString(),
   };
-  await supabase
+  const { error } = await supabase
     .from("recipe_groups")
     .insert({ id: group.id, user_id: userId, name: group.name, created_at: group.createdAt });
+  assertNoError(error);
   return group;
 }
 
@@ -88,7 +91,11 @@ export async function loadRecipeGroupAssignments(): Promise<RecipeGroupAssignmen
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  const { data } = await supabase.from("recipe_group_assignments").select("recipe_id, group_id").eq("user_id", userId);
+  const { data, error } = await supabase
+    .from("recipe_group_assignments")
+    .select("recipe_id, group_id")
+    .eq("user_id", userId);
+  assertNoError(error);
 
   if (data && data.length > 0) {
     const assignments: RecipeGroupAssignments = {};
@@ -103,7 +110,8 @@ export async function loadRecipeGroupAssignments(): Promise<RecipeGroupAssignmen
     groupIds.map((groupId) => ({ user_id: userId, recipe_id: recipeId, group_id: groupId })),
   );
   if (legacyRows.length > 0) {
-    await supabase.from("recipe_group_assignments").insert(legacyRows);
+    const { error: seedError } = await supabase.from("recipe_group_assignments").insert(legacyRows);
+    assertNoError(seedError);
   }
   return legacy;
 }
@@ -116,13 +124,15 @@ export async function saveRecipeGroupAssignments(assignments: RecipeGroupAssignm
   const supabase = createClient();
   const userId = await requireUserId(supabase);
 
-  await supabase.from("recipe_group_assignments").delete().eq("user_id", userId);
+  const { error: deleteError } = await supabase.from("recipe_group_assignments").delete().eq("user_id", userId);
+  assertNoError(deleteError);
 
   const rows = Object.entries(assignments).flatMap(([recipeId, groupIds]) =>
     groupIds.map((groupId) => ({ user_id: userId, recipe_id: recipeId, group_id: groupId })),
   );
   if (rows.length > 0) {
-    await supabase.from("recipe_group_assignments").insert(rows);
+    const { error: insertError } = await supabase.from("recipe_group_assignments").insert(rows);
+    assertNoError(insertError);
   }
 }
 
