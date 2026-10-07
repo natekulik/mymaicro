@@ -220,41 +220,44 @@ function RecipeCard({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <section className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col items-start gap-1.5">
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            {recipe.title}
-          </h2>
-          <Link
-            href={`/recipe-analysis?edit=${recipe.id}`}
-            className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            Edit Recipe
-          </Link>
-          {recipe.sourceUrl && (
-            <a
-              href={recipe.sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-zinc-400 underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300"
-            >
-              View source
-            </a>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+    <section
+      className="grid row-span-5 [grid-template-rows:subgrid] gap-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="min-w-0 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+          {recipe.title}
+        </h2>
+        <div className="flex shrink-0 items-center gap-2">
           <span className="whitespace-nowrap text-xs text-zinc-400">
             Makes {recipe.servings} serving{recipe.servings === 1 ? "" : "s"}
           </span>
           <button
             type="button"
             onClick={onRemove}
-            className="rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
           >
             Remove
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-col items-start gap-1">
+        <Link
+          href={`/recipe-analysis?edit=${recipe.id}`}
+          className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        >
+          Edit Recipe
+        </Link>
+        {recipe.sourceUrl && (
+          <a
+            href={recipe.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-zinc-400 underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300"
+          >
+            View source
+          </a>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -263,29 +266,31 @@ function RecipeCard({
         <MiniStat label="Carbs" value={recipe.nutrition.carbs} unit="g" accent="bg-amber-500" />
         <MiniStat label="Fat" value={recipe.nutrition.fat} unit="g" accent="bg-sky-500" />
       </div>
-      <p className="text-xs text-zinc-400">Per serving.</p>
 
-      <div className="flex flex-wrap items-start gap-2">
-        <button
-          type="button"
-          onClick={() => setExpanded((e) => !e)}
-          className="inline-flex items-center gap-1 self-start rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-        >
-          {expanded ? "Hide details" : "Show ingredients & micros"}
-        </button>
+      <div className="flex flex-col items-start gap-2">
+        <p className="text-xs text-zinc-400">Per serving.</p>
+        <div className="flex flex-wrap items-start gap-2">
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="inline-flex items-center gap-1 self-start rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            {expanded ? "Hide details" : "Show ingredients & micros"}
+          </button>
 
-        {weekDays && (
-          <AddToPlanControl
-            recipeId={recipe.id}
-            weekDays={weekDays}
-            onAdd={onAddMeal}
-            onAddAllDays={onAddMealAllDays}
-          />
-        )}
+          {weekDays && (
+            <AddToPlanControl
+              recipeId={recipe.id}
+              weekDays={weekDays}
+              onAdd={onAddMeal}
+              onAddAllDays={onAddMealAllDays}
+            />
+          )}
 
-        {groups.length > 0 && (
-          <GroupAssignControl groups={groups} assignedGroupIds={assignedGroupIds} onToggle={onToggleGroup} />
-        )}
+          {groups.length > 0 && (
+            <GroupAssignControl groups={groups} assignedGroupIds={assignedGroupIds} onToggle={onToggleGroup} />
+          )}
+        </div>
       </div>
 
       {expanded && (
