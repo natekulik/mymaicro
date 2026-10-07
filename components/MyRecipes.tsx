@@ -66,21 +66,30 @@ export default function MyRecipes() {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
   useEffect(() => {
-    setRecipes(loadSavedRecipes());
-    setTemplate(loadWeeklyPlan());
-    setWeekOverrides(loadWeekOverrides());
-    setCurrentWeekStart(mondayOfDate(todayDateString()));
-    setGroups(loadRecipeGroups());
-    setGroupAssignments(loadRecipeGroupAssignments());
-    setLoaded(true);
+    (async () => {
+      const [loadedRecipes, loadedTemplate, loadedOverrides, loadedGroups, loadedAssignments] = await Promise.all([
+        loadSavedRecipes(),
+        loadWeeklyPlan(),
+        loadWeekOverrides(),
+        loadRecipeGroups(),
+        loadRecipeGroupAssignments(),
+      ]);
+      setRecipes(loadedRecipes);
+      setTemplate(loadedTemplate);
+      setWeekOverrides(loadedOverrides);
+      setCurrentWeekStart(mondayOfDate(todayDateString()));
+      setGroups(loadedGroups);
+      setGroupAssignments(loadedAssignments);
+      setLoaded(true);
+    })();
   }, []);
 
   useEffect(() => {
-    if (weekOverrides) saveWeekOverrides(weekOverrides);
+    if (weekOverrides) void saveWeekOverrides(weekOverrides);
   }, [weekOverrides]);
 
   useEffect(() => {
-    if (groupAssignments) saveRecipeGroupAssignments(groupAssignments);
+    if (groupAssignments) void saveRecipeGroupAssignments(groupAssignments);
   }, [groupAssignments]);
 
   const weekDays =
@@ -94,13 +103,13 @@ export default function MyRecipes() {
     setWeekOverrides((prev) => ({ ...(prev ?? {}), [currentWeekStart]: nextDays }));
   }
 
-  function handleRemove(id: string) {
-    removeSavedRecipe(id);
+  async function handleRemove(id: string) {
+    await removeSavedRecipe(id);
     setRecipes((prev) => prev.filter((r) => r.id !== id));
   }
 
-  function handleAddGroup(name: string) {
-    const group = addRecipeGroup(name);
+  async function handleAddGroup(name: string) {
+    const group = await addRecipeGroup(name);
     setGroups((prev) => [...prev, group]);
   }
 

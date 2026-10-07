@@ -6,7 +6,6 @@ import {
   type MacroColors,
   type MacroProfile,
   calories,
-  defaultProfile,
   macroMatchStatus,
   newId,
   splitEvenly,
@@ -39,15 +38,18 @@ export default function MacroSettings() {
   // Two-click confirm for applying a preset, keyed by preset id.
   const [presetArmedId, setPresetArmedId] = useState<string | null>(null);
 
-  // Load once on mount — localStorage doesn't exist during server render.
+  // Load once on mount.
   useEffect(() => {
-    setProfile(loadProfile() ?? defaultProfile());
-    setPresets(loadMacroPresets());
+    (async () => {
+      const [loadedProfile, loadedPresets] = await Promise.all([loadProfile(), loadMacroPresets()]);
+      setProfile(loadedProfile);
+      setPresets(loadedPresets);
+    })();
   }, []);
 
   // Autosave on every change.
   useEffect(() => {
-    if (profile) saveProfile(profile);
+    if (profile) void saveProfile(profile);
   }, [profile]);
 
   if (!profile) {
@@ -105,15 +107,15 @@ export default function MacroSettings() {
     );
   }
 
-  function handleSavePreset(name: string) {
+  async function handleSavePreset(name: string) {
     if (!profile) return;
-    const preset = saveMacroPreset(name, profile.dailyTarget, profile.meals);
+    const preset = await saveMacroPreset(name, profile.dailyTarget, profile.meals);
     setPresets((prev) => [preset, ...prev]);
     setSaveOpen(false);
   }
 
-  function handleDeletePreset(id: string) {
-    removeMacroPreset(id);
+  async function handleDeletePreset(id: string) {
+    await removeMacroPreset(id);
     setPresets((prev) => prev.filter((p) => p.id !== id));
     if (presetArmedId === id) setPresetArmedId(null);
   }

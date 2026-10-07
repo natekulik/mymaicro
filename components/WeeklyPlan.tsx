@@ -93,22 +93,32 @@ export default function WeeklyPlan() {
   const [slideDirection, setSlideDirection] = useState<"next" | "prev" | null>(null);
 
   useEffect(() => {
-    setTemplate(loadWeeklyPlan());
-    setWeekOverrides(loadWeekOverrides());
-    setPresets(loadWeeklyPresets());
-    setRecipes(loadSavedRecipes());
-    const profile = loadProfile();
-    setMacroColors(profile?.macroColors ?? DEFAULT_MACRO_COLORS);
-    setDailyTarget(profile?.dailyTarget ?? defaultProfile().dailyTarget);
-    setMealTargets(profile?.meals ?? defaultProfile().meals);
-    setMacroPresets(loadMacroPresets());
-    const todayStr = todayDateString();
-    setToday(todayStr);
-    setWeekStart(mondayOfDate(todayStr));
+    (async () => {
+      const [loadedTemplate, loadedOverrides, loadedPresets, loadedRecipes, profile, loadedMacroPresets] =
+        await Promise.all([
+          loadWeeklyPlan(),
+          loadWeekOverrides(),
+          loadWeeklyPresets(),
+          loadSavedRecipes(),
+          loadProfile(),
+          loadMacroPresets(),
+        ]);
+      setTemplate(loadedTemplate);
+      setWeekOverrides(loadedOverrides);
+      setPresets(loadedPresets);
+      setRecipes(loadedRecipes);
+      setMacroColors(profile.macroColors);
+      setDailyTarget(profile.dailyTarget);
+      setMealTargets(profile.meals);
+      setMacroPresets(loadedMacroPresets);
+      const todayStr = todayDateString();
+      setToday(todayStr);
+      setWeekStart(mondayOfDate(todayStr));
+    })();
   }, []);
 
   useEffect(() => {
-    if (weekOverrides) saveWeekOverrides(weekOverrides);
+    if (weekOverrides) void saveWeekOverrides(weekOverrides);
   }, [weekOverrides]);
 
   const ready = template !== null && weekOverrides !== null && weekStart !== null && today !== null;
@@ -168,14 +178,14 @@ export default function WeeklyPlan() {
     setPasteUndoSnapshot(null);
   }
 
-  function handleSavePreset(name: string) {
-    const preset = saveWeeklyPreset(name, weekDays);
+  async function handleSavePreset(name: string) {
+    const preset = await saveWeeklyPreset(name, weekDays);
     setPresets((prev) => [preset, ...prev]);
     setSaveOpen(false);
   }
 
-  function handleDeletePreset(id: string) {
-    removeWeeklyPreset(id);
+  async function handleDeletePreset(id: string) {
+    await removeWeeklyPreset(id);
     setPresets((prev) => prev.filter((p) => p.id !== id));
     if (presetArmedId === id) setPresetArmedId(null);
   }

@@ -1,15 +1,19 @@
-// Local persistence for the weekly meal plan. Two layers, same
+// Supabase-backed persistence for the weekly meal plan. Two layers, same
 // template + override pattern as lib/history.ts:
 //   - `WeeklyPlan` (defaultWeeklyPlan/loadWeeklyPlan/saveWeeklyPlan) is the
 //     one recurring *default template* — what a brand-new, never-customized
-//     week starts from.
+//     week starts from. One JSONB row per user (weekly_plan_templates).
 //   - `WeekOverrides` holds each individual calendar week's own days, once
 //     the user has actually edited that week — from then on that week is
-//     independent of the template and of every other week.
+//     independent of the template and of every other week. One JSONB row
+//     per user (weekly_plan_week_overrides).
 // Mutations are exposed as pure functions over a single week's `DayPlan[]`
 // (plan in, plan out) so Weekly Plan, My Recipes, and Historical Plan can
-// all share the exact same add/remove/paste logic.
+// all share the exact same add/remove/paste logic — none of that touches
+// storage, so it's unchanged from before accounts existed.
 
+import { createClient } from "./supabase/client";
+import { requireUserId } from "./supabase/user";
 import type { SavedRecipe } from "./saved-recipes";
 
 export type PlannedMeal = {
@@ -44,8 +48,9 @@ export const DAY_NAMES = [
 
 const DEFAULT_SUBSECTIONS = ["Breakfast", "Lunch", "Snack", "Dinner"];
 
-const TEMPLATE_STORAGE_KEY = "mymaicro:weeklyPlan:v1";
-const WEEK_OVERRIDES_STORAGE_KEY = "mymaicro:weeklyPlanWeeks:v1";
+const LEGACY_TEMPLATE_KEY = "mymaicro:weeklyPlan:v1";
+const LEGACY_WEEK_OVERRIDES_KEY = "mymaicro:weeklyPlanWeeks:v1";
+const LEGACY_PRESETS_KEY = "mymaicro:weeklyPresets:v1";
 
 export function defaultWeeklyPlan(): WeeklyPlan {
   return {
@@ -64,27 +69,40 @@ function normalizeDay(day: DayPlan): DayPlan {
   return { ...day, macroPresetId: day.macroPresetId ?? null };
 }
 
-export function loadWeeklyPlan(): WeeklyPlan {
-  if (typeof window === "undefined") return defaultWeeklyPlan();
+function loadLegacyWeeklyPlan(): WeeklyPlan | null {
+  if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(TEMPLATE_STORAGE_KEY);
-    if (!raw) return defaultWeeklyPlan();
+    const raw = window.localStorage.getItem(LEGACY_TEMPLATE_KEY);
+    if (!raw) return null;
     const parsed = JSON.parse(raw) as WeeklyPlan;
-    if (!Array.isArray(parsed?.days) || parsed.days.length === 0) return defaultWeeklyPlan();
+    if (!Array.isArray(parsed?.days) || parsed.days.length === 0) return null;
     return { days: parsed.days.map(normalizeDay) };
   } catch {
-    return defaultWeeklyPlan();
+    return null;
   }
 }
 
-export function saveWeeklyPlan(plan: WeeklyPlan): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(TEMPLATE_STORAGE_KEY, JSON.stringify(plan));
-  } catch {
-    // Storage can fail (quota, private browsing) — losing autosave isn't
-    // worth crashing the page over.
+export async function loadWeeklyPlan(): Promise<WeeklyPlan> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+
+  const { data } = await supabase.from("weekly_plan_templates").select("data").eq("user_id", userId).maybeSingle();
+  if (data) {
+    const plan = data.data as WeeklyPlan;
+    return { days: plan.days.map(normalizeDay) };
   }
+
+  const initial = loadLegacyWeeklyPlan() ?? defaultWeeklyPlan();
+  await saveWeeklyPlan(initial);
+  return initial;
+}
+
+export async function saveWeeklyPlan(plan: WeeklyPlan): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  await supabase
+    .from("weekly_plan_templates")
+    .upsert({ user_id: userId, data: plan, updated_at: new Date().toISOString() });
 }
 
 // Keyed by that week's Monday, "YYYY-MM-DD" (see lib/history.ts's
@@ -92,10 +110,10 @@ export function saveWeeklyPlan(plan: WeeklyPlan): void {
 // here at all.
 export type WeekOverrides = Record<string, DayPlan[]>;
 
-export function loadWeekOverrides(): WeekOverrides {
+function loadLegacyWeekOverrides(): WeekOverrides {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(WEEK_OVERRIDES_STORAGE_KEY);
+    const raw = window.localStorage.getItem(LEGACY_WEEK_OVERRIDES_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as WeekOverrides;
     if (!parsed || typeof parsed !== "object") return {};
@@ -109,14 +127,35 @@ export function loadWeekOverrides(): WeekOverrides {
   }
 }
 
-export function saveWeekOverrides(overrides: WeekOverrides): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(WEEK_OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
-  } catch {
-    // Storage can fail (quota, private browsing) — losing autosave isn't
-    // worth crashing the page over.
+export async function loadWeekOverrides(): Promise<WeekOverrides> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+
+  const { data } = await supabase
+    .from("weekly_plan_week_overrides")
+    .select("data")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (data) {
+    const raw = data.data as WeekOverrides;
+    const normalized: WeekOverrides = {};
+    for (const [weekStart, days] of Object.entries(raw)) {
+      normalized[weekStart] = days.map(normalizeDay);
+    }
+    return normalized;
   }
+
+  const legacy = loadLegacyWeekOverrides();
+  if (Object.keys(legacy).length > 0) await saveWeekOverrides(legacy);
+  return legacy;
+}
+
+export async function saveWeekOverrides(overrides: WeekOverrides): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  await supabase
+    .from("weekly_plan_week_overrides")
+    .upsert({ user_id: userId, data: overrides, updated_at: new Date().toISOString() });
 }
 
 function cloneDays(days: DayPlan[]): DayPlan[] {
@@ -224,8 +263,8 @@ export function pasteToAllDays(days: DayPlan[], sourceDay: string): DayPlan[] {
 
 // A named, reusable snapshot of a full week — "Add Weekly Preset" on
 // Weekly Plan saves whatever's filled out for the currently-viewed week
-// under a name the user chooses; "My Presets" then lets that snapshot be
-// dropped onto any week later via applyPreset.
+// under a name the user chooses; "My Weekly Presets" then lets that
+// snapshot be dropped onto any week later via applyPreset.
 export type WeeklyPreset = {
   id: string;
   name: string;
@@ -233,12 +272,10 @@ export type WeeklyPreset = {
   days: DayPlan[];
 };
 
-const PRESETS_STORAGE_KEY = "mymaicro:weeklyPresets:v1";
-
-export function loadWeeklyPresets(): WeeklyPreset[] {
+function loadLegacyWeeklyPresets(): WeeklyPreset[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(PRESETS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(LEGACY_PRESETS_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as WeeklyPreset[]) : [];
@@ -247,29 +284,52 @@ export function loadWeeklyPresets(): WeeklyPreset[] {
   }
 }
 
-function persistPresets(presets: WeeklyPreset[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
-  } catch {
-    // Storage can fail (quota, private browsing) — losing a save isn't
-    // worth crashing the page over.
-  }
+type PresetRow = { id: string; name: string; created_at: string; days: DayPlan[] };
+
+function fromPresetRow(row: PresetRow): WeeklyPreset {
+  return { id: row.id, name: row.name, createdAt: row.created_at, days: row.days.map(normalizeDay) };
 }
 
-export function saveWeeklyPreset(name: string, days: DayPlan[]): WeeklyPreset {
+export async function loadWeeklyPresets(): Promise<WeeklyPreset[]> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+
+  const { data } = await supabase
+    .from("weekly_presets")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+
+  if (data && data.length > 0) return (data as PresetRow[]).map(fromPresetRow);
+
+  const legacy = loadLegacyWeeklyPresets();
+  if (legacy.length > 0) {
+    await supabase
+      .from("weekly_presets")
+      .insert(legacy.map((p) => ({ id: p.id, user_id: userId, name: p.name, created_at: p.createdAt, days: p.days })));
+  }
+  return legacy;
+}
+
+export async function saveWeeklyPreset(name: string, days: DayPlan[]): Promise<WeeklyPreset> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
   const preset: WeeklyPreset = {
     id: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     createdAt: new Date().toISOString(),
     days: cloneDays(days),
   };
-  persistPresets([preset, ...loadWeeklyPresets()]);
+  await supabase
+    .from("weekly_presets")
+    .insert({ id: preset.id, user_id: userId, name: preset.name, created_at: preset.createdAt, days: preset.days });
   return preset;
 }
 
-export function removeWeeklyPreset(id: string): void {
-  persistPresets(loadWeeklyPresets().filter((p) => p.id !== id));
+export async function removeWeeklyPreset(id: string): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  await supabase.from("weekly_presets").delete().eq("id", id).eq("user_id", userId);
 }
 
 // The days to drop onto a week when applying a preset — a fresh copy with

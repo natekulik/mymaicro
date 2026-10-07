@@ -67,15 +67,17 @@ export default function HistoricalPlan({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(() => {
-    setHistoryLog(loadHistoryLog());
-    const now = new Date();
-    setToday(todayDateString());
-    setYear(now.getFullYear());
-    setMonth(now.getMonth());
+    (async () => {
+      setHistoryLog(await loadHistoryLog());
+      const now = new Date();
+      setToday(todayDateString());
+      setYear(now.getFullYear());
+      setMonth(now.getMonth());
+    })();
   }, []);
 
   useEffect(() => {
-    if (historyLog) saveHistoryLog(historyLog);
+    if (historyLog) void saveHistoryLog(historyLog);
   }, [historyLog]);
 
   const ready = historyLog !== null && today !== null && year !== null && month !== null;

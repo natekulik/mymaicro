@@ -8,6 +8,8 @@
 // on, so later edits upstream (that week, or the template) don't
 // retroactively change a day the user has already logged/edited.
 
+import { createClient } from "./supabase/client";
+import { requireUserId } from "./supabase/user";
 import {
   DAY_NAMES,
   resolveWeekDays,
@@ -26,12 +28,12 @@ export type HistoryLog = {
   overrides: Record<string, HistoryDay>;
 };
 
-const STORAGE_KEY = "mymaicro:historyLog:v1";
+const LEGACY_STORAGE_KEY = "mymaicro:historyLog:v1";
 
-export function loadHistoryLog(): HistoryLog {
+function loadLegacyHistoryLog(): HistoryLog {
   if (typeof window === "undefined") return { overrides: {} };
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return { overrides: {} };
     const parsed = JSON.parse(raw) as HistoryLog;
     return parsed?.overrides ? parsed : { overrides: {} };
@@ -40,14 +42,22 @@ export function loadHistoryLog(): HistoryLog {
   }
 }
 
-export function saveHistoryLog(log: HistoryLog): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
-  } catch {
-    // Storage can fail (quota, private browsing) — losing autosave isn't
-    // worth crashing the page over.
-  }
+export async function loadHistoryLog(): Promise<HistoryLog> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+
+  const { data } = await supabase.from("history_log").select("data").eq("user_id", userId).maybeSingle();
+  if (data) return data.data as HistoryLog;
+
+  const legacy = loadLegacyHistoryLog();
+  if (Object.keys(legacy.overrides).length > 0) await saveHistoryLog(legacy);
+  return legacy;
+}
+
+export async function saveHistoryLog(log: HistoryLog): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  await supabase.from("history_log").upsert({ user_id: userId, data: log, updated_at: new Date().toISOString() });
 }
 
 const JS_WEEKDAY_TO_DAY_NAME = [

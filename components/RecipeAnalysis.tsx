@@ -179,18 +179,20 @@ export default function RecipeAnalysis() {
   useEffect(() => {
     const editId = new URLSearchParams(window.location.search).get("edit");
     if (!editId) return;
-    const recipe = loadSavedRecipes().find((r) => r.id === editId);
-    if (!recipe) return;
-    setMode("manual");
-    setManualTitle(recipe.title);
-    setManualServings(String(recipe.servings));
-    setManualText(recipe.ingredients.join("\n"));
-    setEditingRecipeId(recipe.id);
-    runAnalyze("/api/analyze-recipe-manual", {
-      title: recipe.title,
-      text: recipe.ingredients.join("\n"),
-      servings: recipe.servings,
-    });
+    (async () => {
+      const recipe = (await loadSavedRecipes()).find((r) => r.id === editId);
+      if (!recipe) return;
+      setMode("manual");
+      setManualTitle(recipe.title);
+      setManualServings(String(recipe.servings));
+      setManualText(recipe.ingredients.join("\n"));
+      setEditingRecipeId(recipe.id);
+      runAnalyze("/api/analyze-recipe-manual", {
+        title: recipe.title,
+        text: recipe.ingredients.join("\n"),
+        servings: recipe.servings,
+      });
+    })();
     // Runs once on mount only — intentionally not re-running on every
     // render.
   }, []);
@@ -419,7 +421,7 @@ export default function RecipeAnalysis() {
   // disabled prop on the button below), so everything here is always a
   // real value — this snapshots the final, already-confirmed numbers
   // rather than the live analyze state.
-  function handleSaveRecipe() {
+  async function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
     const patch = {
       title: result.title,
@@ -430,9 +432,9 @@ export default function RecipeAnalysis() {
       ingredients: result.ingredients,
     };
     if (editingRecipeId) {
-      updateSavedRecipe(editingRecipeId, patch);
+      await updateSavedRecipe(editingRecipeId, patch);
     } else {
-      saveRecipe(patch);
+      await saveRecipe(patch);
     }
     setJustSaved(true);
   }
