@@ -374,13 +374,13 @@ function ToggleSwitch({
       aria-checked={checked}
       aria-label={label}
       onClick={onChange}
-      className={`relative h-5 w-9 shrink-0 rounded-full transition ${
-        checked ? "bg-zinc-900 dark:bg-zinc-50" : "bg-zinc-200 dark:bg-zinc-700"
+      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 ease-in-out ${
+        checked ? "bg-[#34C759]" : "bg-zinc-200 dark:bg-zinc-700"
       }`}
     >
       <span
-        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform dark:bg-zinc-900 ${
-          checked ? "translate-x-[18px]" : "translate-x-0.5"
+        className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow-md transition-transform duration-200 ease-in-out ${
+          checked ? "translate-x-5" : "translate-x-0"
         }`}
       />
     </button>
