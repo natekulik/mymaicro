@@ -16,10 +16,14 @@ function loadLegacyProfile(): MacroProfile | null {
     const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as MacroProfile;
-    // Profiles saved before macro colors existed won't have this field —
-    // fill it in rather than let every color-reading call site handle
-    // `undefined`.
-    return { ...parsed, macroColors: { ...DEFAULT_MACRO_COLORS, ...parsed.macroColors } };
+    // Profiles saved before macro colors / the meals toggle existed won't
+    // have these fields — fill them in rather than let every call site
+    // handle `undefined`.
+    return {
+      ...parsed,
+      macroColors: { ...DEFAULT_MACRO_COLORS, ...parsed.macroColors },
+      mealsEnabled: parsed.mealsEnabled ?? true,
+    };
   } catch {
     return null;
   }
@@ -33,7 +37,11 @@ export async function loadProfile(): Promise<MacroProfile> {
   assertNoError(error);
   if (data) {
     const profile = data.data as MacroProfile;
-    return { ...profile, macroColors: { ...DEFAULT_MACRO_COLORS, ...profile.macroColors } };
+    return {
+      ...profile,
+      macroColors: { ...DEFAULT_MACRO_COLORS, ...profile.macroColors },
+      mealsEnabled: profile.mealsEnabled ?? true,
+    };
   }
 
   const initial = loadLegacyProfile() ?? defaultProfile();

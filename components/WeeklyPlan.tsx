@@ -109,7 +109,7 @@ export default function WeeklyPlan() {
       setRecipes(loadedRecipes);
       setMacroColors(profile.macroColors);
       setDailyTarget(profile.dailyTarget);
-      setMealTargets(profile.meals);
+      setMealTargets(profile.mealsEnabled ? profile.meals : []);
       setMacroPresets(loadedMacroPresets);
       const todayStr = todayDateString();
       setToday(todayStr);
@@ -615,6 +615,11 @@ function DayDetail({
                         flagOverTarget={false}
                       />
                     </>
+                  ) : mealTargets.length === 0 ? (
+                    <span className="text-[11px] text-zinc-400">
+                      &quot;Macro Specific Meals&quot; is off on Daily Macros, so there&apos;s no
+                      per-meal goal to compare against.
+                    </span>
                   ) : (
                     <span className="text-[11px] text-zinc-400">
                       No meal named &quot;{subsection}&quot; on Daily Macros, so there&apos;s no goal

@@ -33,6 +33,11 @@ export const DEFAULT_MACRO_COLORS: MacroColors = {
 export type MacroProfile = {
   dailyTarget: Macro;
   meals: MealSlot[];
+  // Whether Daily Macros shows/uses per-meal targets at all — off means
+  // the user only cares about the daily total, not how it's split across
+  // meals. `meals` itself is left untouched while off, so turning this
+  // back on restores whatever split was last set up rather than losing it.
+  mealsEnabled: boolean;
   macroColors: MacroColors;
 };
 
@@ -119,6 +124,7 @@ export function defaultProfile(): MacroProfile {
   return {
     dailyTarget,
     meals: splitEvenly(dailyTarget, 3),
+    mealsEnabled: true,
     macroColors: { ...DEFAULT_MACRO_COLORS },
   };
 }

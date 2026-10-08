@@ -96,6 +96,10 @@ export default function MacroSettings() {
     setProfile((p) => (p ? { ...p, meals: splitEvenly(p.dailyTarget, p.meals.length) } : p));
   }
 
+  function toggleMealsEnabled() {
+    setProfile((p) => (p ? { ...p, mealsEnabled: !p.mealsEnabled } : p));
+  }
+
   function updateMeal(id: string, patch: Partial<{ name: string; macros: Macro }>) {
     setProfile((p) =>
       p
@@ -242,97 +246,144 @@ export default function MacroSettings() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              Meals per day
+              Macro Specific Meals
             </h2>
-            <div className="flex items-center gap-2 rounded-full border border-zinc-200 px-1 dark:border-zinc-800">
+            <ToggleSwitch
+              checked={profile.mealsEnabled}
+              onChange={toggleMealsEnabled}
+              label="Macro specific meals"
+            />
+          </div>
+          {profile.mealsEnabled && (
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-full border border-zinc-200 px-1 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => updateMealCount(profile.meals.length - 1)}
+                  disabled={profile.meals.length <= MIN_MEALS}
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
+                >
+                  −
+                </button>
+                <span className="w-4 text-center text-sm font-medium tabular-nums text-zinc-900 dark:text-zinc-50">
+                  {profile.meals.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => updateMealCount(profile.meals.length + 1)}
+                  disabled={profile.meals.length >= MAX_MEALS}
+                  className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
+                >
+                  +
+                </button>
+              </div>
               <button
                 type="button"
-                onClick={() => updateMealCount(profile.meals.length - 1)}
-                disabled={profile.meals.length <= MIN_MEALS}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
+                onClick={autoSplit}
+                className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
               >
-                −
-              </button>
-              <span className="w-4 text-center text-sm font-medium tabular-nums text-zinc-900 dark:text-zinc-50">
-                {profile.meals.length}
-              </span>
-              <button
-                type="button"
-                onClick={() => updateMealCount(profile.meals.length + 1)}
-                disabled={profile.meals.length >= MAX_MEALS}
-                className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
-              >
-                +
+                Auto-split evenly
               </button>
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={autoSplit}
-            className="rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Auto-split evenly
-          </button>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {profile.meals.map((meal) => (
-            <MealCard
-              key={meal.id}
-              name={meal.name}
-              macros={meal.macros}
-              macroColors={profile.macroColors}
-              macroStatus={macroStatus}
-              onNameChange={(name) => updateMeal(meal.id, { name })}
-              onMacrosChange={(macros) => updateMeal(meal.id, { macros })}
-            />
-          ))}
-        </div>
+        {profile.mealsEnabled ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {profile.meals.map((meal) => (
+              <MealCard
+                key={meal.id}
+                name={meal.name}
+                macros={meal.macros}
+                macroColors={profile.macroColors}
+                macroStatus={macroStatus}
+                onNameChange={(name) => updateMeal(meal.id, { name })}
+                onMacrosChange={(macros) => updateMeal(meal.id, { macros })}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-2xl border border-dashed border-zinc-200 p-4 text-xs text-zinc-400 dark:border-zinc-700">
+            Off — only your daily target above is tracked. Turn this on if you want to split it
+            across specific meals instead.
+          </p>
+        )}
       </section>
 
       {/* Summary */}
-      <section className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-            Meals vs. daily target
-          </h2>
-          <span
-            className={`text-xs font-medium ${
-              mealCalories > dailyCalories ? "text-rose-500" : "text-zinc-400"
-            }`}
-          >
-            {mealCalories} / {dailyCalories} cals
-          </span>
-        </div>
-        <div className="flex flex-col gap-3">
-          <ProgressRow
-            label="Protein"
-            unit="g"
-            actual={mealTotals.protein}
-            target={profile.dailyTarget.protein}
-            color={profile.macroColors.protein}
-          />
-          <ProgressRow
-            label="Carbs"
-            unit="g"
-            actual={mealTotals.carbs}
-            target={profile.dailyTarget.carbs}
-            color={profile.macroColors.carbs}
-          />
-          <ProgressRow
-            label="Fat"
-            unit="g"
-            actual={mealTotals.fat}
-            target={profile.dailyTarget.fat}
-            color={profile.macroColors.fat}
-          />
-        </div>
-      </section>
+      {profile.mealsEnabled && (
+        <section className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Meals vs. daily target
+            </h2>
+            <span
+              className={`text-xs font-medium ${
+                mealCalories > dailyCalories ? "text-rose-500" : "text-zinc-400"
+              }`}
+            >
+              {mealCalories} / {dailyCalories} cals
+            </span>
+          </div>
+          <div className="flex flex-col gap-3">
+            <ProgressRow
+              label="Protein"
+              unit="g"
+              actual={mealTotals.protein}
+              target={profile.dailyTarget.protein}
+              color={profile.macroColors.protein}
+            />
+            <ProgressRow
+              label="Carbs"
+              unit="g"
+              actual={mealTotals.carbs}
+              target={profile.dailyTarget.carbs}
+              color={profile.macroColors.carbs}
+            />
+            <ProgressRow
+              label="Fat"
+              unit="g"
+              actual={mealTotals.fat}
+              target={profile.dailyTarget.fat}
+              color={profile.macroColors.fat}
+            />
+          </div>
+        </section>
+      )}
 
       <p className="text-center text-xs text-zinc-400">
         Saved locally in this browser for now — accounts &amp; sync come next.
       </p>
     </div>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={onChange}
+      className={`relative h-5 w-9 shrink-0 rounded-full transition ${
+        checked ? "bg-zinc-900 dark:bg-zinc-50" : "bg-zinc-200 dark:bg-zinc-700"
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform dark:bg-zinc-900 ${
+          checked ? "translate-x-[18px]" : "translate-x-0.5"
+        }`}
+      />
+    </button>
   );
 }
 
