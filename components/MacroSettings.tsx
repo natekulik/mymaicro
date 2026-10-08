@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   type Macro,
   type MacroColors,
@@ -253,6 +253,7 @@ export default function MacroSettings() {
               onChange={toggleMealsEnabled}
               label="Macro specific meals"
             />
+            <InfoTooltip text="If you want to hit specific macros per meal, fill out the meals below — you can then track against them for each meal slot from the Plan tab. Leave this off if you only care about your daily total." />
           </div>
           {profile.mealsEnabled && (
             <div className="flex items-center gap-3">
@@ -384,6 +385,46 @@ function ToggleSwitch({
         }`}
       />
     </button>
+  );
+}
+
+// Closes on a click anywhere outside the icon/popover pair — same pattern
+// used for the group popovers on My Recipes.
+function useCloseOnOutsideClick<T extends HTMLElement>(open: boolean, onClose: () => void) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handlePointerDown(e: PointerEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open, onClose]);
+  return ref;
+}
+
+function InfoTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useCloseOnOutsideClick<HTMLDivElement>(open, () => setOpen(false));
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="More info"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 text-[10px] font-medium text-zinc-400 transition hover:border-zinc-400 hover:text-zinc-500 dark:border-zinc-600 dark:text-zinc-500 dark:hover:border-zinc-500 dark:hover:text-zinc-400"
+      >
+        i
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-10 mt-2 w-64 rounded-xl border border-zinc-200 bg-white p-3 text-xs leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+          {text}
+        </div>
+      )}
+    </div>
   );
 }
 
