@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
 import { estimateRecipeMacrosForApi } from "@/lib/usda/resolve";
-import { ensureUsdaDbReady } from "@/lib/usda/db";
 import type { RecipeResult } from "@/lib/recipe-types";
 
 export const runtime = "nodejs";
-// Generous headroom for the one-time cold-start download of the ~1GB USDA
-// database from R2 (see lib/usda/db.ts) — subsequent requests on the same
-// warm instance skip the download and return in normal time.
-export const maxDuration = 60;
 
 // Manual entry has no source page to parse structured data from, so this
 // route turns freeform pasted text into a clean ingredient list, then
@@ -43,8 +38,7 @@ export async function POST(request: Request) {
   const servings =
     typeof body.servings === "number" && body.servings > 0 ? body.servings : null;
 
-  await ensureUsdaDbReady();
-  const { estimatedNutrition, estimatedMicros, ingredientDetails } = estimateRecipeMacrosForApi(
+  const { estimatedNutrition, estimatedMicros, ingredientDetails } = await estimateRecipeMacrosForApi(
     ingredients,
     servings,
   );

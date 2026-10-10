@@ -42,11 +42,17 @@ next-env.d.ts
 
 # USDA source downloads — large, easily regenerated with
 # `node scripts/import-usda.mjs`. The built foods.db is no longer committed
-# either — now that it includes Branded Foods it's ~1GB, over GitHub's file
-# size limit. It's uploaded to Cloudflare R2 instead (scripts/upload-usda-db.mjs)
-# and downloaded at runtime (lib/usda/db.ts) — see USDA_DB_URL in env.example.
+# or even used at runtime — now that it includes Branded Foods it's ~1GB,
+# over both GitHub's file size limit and Vercel's 500MB /tmp cap. The data
+# lives in Cloudflare D1 instead (queried over HTTP, see lib/usda/d1.ts);
+# this local file is now only an intermediate build artifact used to
+# generate the SQL dumps that get imported into D1.
 /data/usda/raw/
 /data/usda/extracted/
 /data/usda/foods.db
 /data/usda/foods.db-shm
 /data/usda/foods.db-wal
+
+# Scratch SQL dumps used one-time to seed Cloudflare D1 from foods.db —
+# not part of the app, safe to delete once the import is confirmed working.
+/scratch_d1/

@@ -1,4 +1,4 @@
-import { getUsdaDb } from "./db";
+import { d1Query } from "./d1";
 
 export type FoodSource = "foundation" | "sr_legacy" | "branded";
 
@@ -30,42 +30,58 @@ const SOURCE_PRIORITY: FoodSource[] = ["foundation", "sr_legacy", "branded"];
 // query "onion" even though it's clearly the best match.
 const CANDIDATES_PER_QUERY = 20;
 
-// Returns ranked candidates across foundation (exact, then loose match) and
-// sr_legacy (exact, then loose match), in that priority order. The caller
+// Returns ranked candidates across foundation (exact, then loose match),
+// sr_legacy, and branded (same order), in that priority order. The caller
 // (resolve.ts) picks the first candidate that actually has usable macro
 // nutrient data — text relevance alone isn't enough to accept a match.
-export function findFoodCandidates(query: string): FoodCandidate[] {
+//
+// D1 serializes query EXECUTION on a given database even when many
+// requests are fired concurrently (confirmed by benchmarking: firing N
+// FTS queries in parallel takes ~N times a single query's cost, not one
+// query's worth of wall time) — so the lever that actually matters is
+// minimizing the TOTAL COUNT of statements per request, not round-trip
+// parallelism. Each of AND/OR mode is one round trip (a UNION ALL across
+// all three sources, each already ORDER BY rank LIMIT N inside its own
+// branch) — D1 also caps compound SELECTs at 5 terms, which 3 sources
+// fits comfortably under.
+// Below this many AND-mode hits, the OR (loose) search is also worth
+// running — resolve.ts only ever falls through to "low" confidence
+// candidates when the "high" confidence ones didn't have usable macro
+// data (rare: mostly analyte-only Foundation Foods records), but that
+// case does need OR-mode candidates to fall back to.
+const MIN_HIGH_CONFIDENCE_HITS = 3;
+
+export async function findFoodCandidates(query: string): Promise<FoodCandidate[]> {
   const andQuery = toFtsQuery(query, "AND");
   const orQuery = toFtsQuery(query, "OR");
-  const candidates: FoodCandidate[] = [];
 
-  if (andQuery) {
-    for (const source of SOURCE_PRIORITY) {
-      for (const match of search(andQuery, source)) {
-        candidates.push({ match, confidence: "high" });
-      }
-    }
-  }
-  if (orQuery) {
-    for (const source of SOURCE_PRIORITY) {
-      for (const match of search(orQuery, source)) {
-        candidates.push({ match, confidence: "low" });
-      }
-    }
-  }
+  const andRows = andQuery ? await searchAllSources(andQuery) : [];
+  // Skipping the OR search in the common case (a strict match already
+  // found plenty) is the single biggest lever on latency here — see the
+  // note above findFoodCandidates: D1 serializes query execution, so
+  // every statement NOT issued is time saved, not just a round trip.
+  const orRows =
+    orQuery && andRows.length < MIN_HIGH_CONFIDENCE_HITS ? await searchAllSources(orQuery) : [];
+
+  const candidates: FoodCandidate[] = [];
+  for (const match of andRows) candidates.push({ match, confidence: "high" });
+  for (const match of orRows) candidates.push({ match, confidence: "low" });
   return candidates;
 }
 
-function search(ftsQuery: string, source: FoodSource): MatchRow[] {
-  const db = getUsdaDb();
-  return db
-    .prepare(
-      `SELECT f.fdc_id AS fdcId, f.description AS description, f.source AS source
-       FROM foods_fts fts JOIN foods f ON f.fdc_id = fts.rowid
-       WHERE foods_fts MATCH ? AND f.source = ?
-       ORDER BY rank LIMIT ?`,
-    )
-    .all(ftsQuery, source, CANDIDATES_PER_QUERY) as MatchRow[];
+async function searchAllSources(ftsQuery: string): Promise<MatchRow[]> {
+  const sql = SOURCE_PRIORITY.map(
+    () =>
+      `SELECT * FROM (
+         SELECT f.fdc_id AS fdcId, f.description AS description, f.source AS source
+         FROM foods_fts fts JOIN foods f ON f.fdc_id = fts.rowid
+         WHERE foods_fts MATCH ? AND f.source = ?
+         ORDER BY rank LIMIT ?
+       )`,
+  ).join(" UNION ALL ");
+
+  const params = SOURCE_PRIORITY.flatMap((source) => [ftsQuery, source, CANDIDATES_PER_QUERY]);
+  return d1Query<MatchRow>(sql, params);
 }
 
 // FTS5's default tokenizer does exact-token matching with no stemming, so

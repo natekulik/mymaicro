@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 import { resolveKnownFoodMacros } from "@/lib/usda/resolve";
-import { ensureUsdaDbReady } from "@/lib/usda/db";
 
 export const runtime = "nodejs";
-// Generous headroom for the one-time cold-start download of the ~1GB USDA
-// database from R2 (see lib/usda/db.ts) — subsequent requests on the same
-// warm instance skip the download and return in normal time.
-export const maxDuration = 60;
 
 // Recomputes one ingredient's macros for either kind of user override:
 // - swapping to a different composition variant (same grams, different
@@ -26,8 +21,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing food or amount." }, { status: 400 });
   }
 
-  await ensureUsdaDbReady();
-  const result = resolveKnownFoodMacros(fdcId, quantity, unit?.trim() || null);
+  const result = await resolveKnownFoodMacros(fdcId, quantity, unit?.trim() || null);
   if ("error" in result) {
     return NextResponse.json({ error: result.error }, { status: 422 });
   }

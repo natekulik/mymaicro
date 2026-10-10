@@ -1,4 +1,4 @@
-import { getUsdaDb } from "./db";
+import { d1Query } from "./d1";
 import { findFoodCandidates, type FoodCandidate, type FoodMatch } from "./match";
 import { normalizeUnit, unitToBaseAmount } from "./units";
 import { parseIngredientLine } from "./parse-ingredient";
@@ -26,17 +26,55 @@ export type IngredientMacroResult = {
   variantOptions: VariantOption[];
 };
 
-function getNutrientRows(fdcId: number): Map<number, number> {
-  const db = getUsdaDb();
-  const rows = db
-    .prepare("SELECT nutrient_id AS nutrientId, amount FROM food_nutrients WHERE fdc_id = ?")
-    .all(fdcId) as { nutrientId: number; amount: number }[];
-  return new Map(rows.map((r) => [r.nutrientId, r.amount]));
+type PortionRow = { unitName: string | null; modifier: string | null; gramWeight: number };
+type NutrientsByFdc = Map<number, Map<number, number>>;
+type PortionsByFdc = Map<number, PortionRow[]>;
+
+// Every DB-touching lookup in this module is a batched call keyed by a set
+// of fdcIds, fetched once up front per ingredient (see resolveIngredientMacros)
+// — everything below this point that used to be a per-candidate query is now
+// a synchronous read of these pre-fetched maps. D1 is a real network call
+// per round trip, so the shape of this file is "gather every id you might
+// need, fetch each table ONCE with `WHERE fdc_id IN (...)`, then work in
+// memory" rather than "query per candidate" like the old local-SQLite version.
+
+async function getNutrientRowsBulk(fdcIds: number[]): Promise<NutrientsByFdc> {
+  const map: NutrientsByFdc = new Map();
+  if (fdcIds.length === 0) return map;
+
+  const placeholders = fdcIds.map(() => "?").join(",");
+  const rows = await d1Query<{ fdcId: number; nutrientId: number; amount: number }>(
+    `SELECT fdc_id AS fdcId, nutrient_id AS nutrientId, amount FROM food_nutrients WHERE fdc_id IN (${placeholders})`,
+    fdcIds,
+  );
+  for (const row of rows) {
+    const byNutrient = map.get(row.fdcId) ?? new Map<number, number>();
+    byNutrient.set(row.nutrientId, row.amount);
+    map.set(row.fdcId, byNutrient);
+  }
+  return map;
 }
 
-function getMacrosPer100g(fdcId: number): Macro | null {
-  const byId = getNutrientRows(fdcId);
-  if (byId.size === 0) return null;
+async function getPortionsBulk(fdcIds: number[]): Promise<PortionsByFdc> {
+  const map: PortionsByFdc = new Map();
+  if (fdcIds.length === 0) return map;
+
+  const placeholders = fdcIds.map(() => "?").join(",");
+  const rows = await d1Query<{ fdcId: number; unitName: string | null; modifier: string | null; gramWeight: number }>(
+    `SELECT fdc_id AS fdcId, unit_name AS unitName, modifier, gram_weight AS gramWeight FROM food_portions WHERE fdc_id IN (${placeholders})`,
+    fdcIds,
+  );
+  for (const row of rows) {
+    const list = map.get(row.fdcId) ?? [];
+    list.push({ unitName: row.unitName, modifier: row.modifier, gramWeight: row.gramWeight });
+    map.set(row.fdcId, list);
+  }
+  return map;
+}
+
+function getMacrosPer100g(fdcId: number, nutrientsByFdc: NutrientsByFdc): Macro | null {
+  const byId = nutrientsByFdc.get(fdcId);
+  if (!byId || byId.size === 0) return null;
 
   // Some Foundation Foods entries only carry detailed micronutrient/analyte
   // panels with no rolled-up proximates at all. Energy is required — it's
@@ -58,9 +96,10 @@ function getMacrosPer100g(fdcId: number): Macro | null {
 // meats, for instance) should show as "no data" downstream, not a
 // misleading 0 — so only keys the food actually has a row for are
 // included, unlike the four core macros above.
-function getMicrosPer100g(fdcId: number): MicroTotals {
-  const byId = getNutrientRows(fdcId);
+function getMicrosPer100g(fdcId: number, nutrientsByFdc: NutrientsByFdc): MicroTotals {
+  const byId = nutrientsByFdc.get(fdcId);
   const micros: MicroTotals = {};
+  if (!byId) return micros;
   for (const def of MICRO_NUTRIENTS) {
     const amount = byId.get(def.id);
     if (amount !== undefined) micros[def.key] = amount;
@@ -82,19 +121,15 @@ function scaleMicros(per100g: MicroTotals, grams: number): MicroTotals {
 // ingredients (a cup of flour and a cup of spinach aren't close). SR Legacy
 // stores the unit text in `modifier` rather than the resolved unit name, so
 // both fields are checked.
-function getPortions(fdcId: number) {
-  const db = getUsdaDb();
-  return db
-    .prepare(
-      "SELECT unit_name AS unitName, modifier, gram_weight AS gramWeight FROM food_portions WHERE fdc_id = ?",
-    )
-    .all(fdcId) as { unitName: string | null; modifier: string | null; gramWeight: number }[];
-}
-
-function findUsdaPortionGramsPerUnit(fdcId: number, unitText: string | null): number | null {
+function findUsdaPortionGramsPerUnit(
+  fdcId: number,
+  unitText: string | null,
+  portionsByFdc: PortionsByFdc,
+): number | null {
   if (!unitText) return null;
   const needle = unitText.toLowerCase().replace(/s$/, "");
-  const hit = getPortions(fdcId).find((p) => {
+  const portions = portionsByFdc.get(fdcId) ?? [];
+  const hit = portions.find((p) => {
     const candidates = [p.unitName, p.modifier]
       .filter((v): v is string => Boolean(v))
       .map((v) => v.toLowerCase());
@@ -108,8 +143,8 @@ function findUsdaPortionGramsPerUnit(fdcId: number, unitText: string | null): nu
 // food is usually its typical single-item weight (e.g. "1 large" for an
 // egg), so it's a reasonable default when there's nothing more specific to
 // match against.
-function findDefaultPortionGrams(fdcId: number): number | null {
-  const portions = getPortions(fdcId);
+function findDefaultPortionGrams(fdcId: number, portionsByFdc: PortionsByFdc): number | null {
+  const portions = portionsByFdc.get(fdcId) ?? [];
   return portions.length > 0 ? portions[0].gramWeight : null;
 }
 
@@ -122,6 +157,7 @@ function gramsForCandidate(
   unitText: string | null,
   quantity: number,
   hasExplicitQuantity: boolean,
+  portionsByFdc: PortionsByFdc,
 ): GramsOutcome {
   const unit = normalizeUnit(unitText);
 
@@ -135,7 +171,7 @@ function gramsForCandidate(
     return { grams: null, needsQuantity: true, suggestedUnit: "oz" };
   }
 
-  const portionGramsPerUnit = findUsdaPortionGramsPerUnit(fdcId, unitText);
+  const portionGramsPerUnit = findUsdaPortionGramsPerUnit(fdcId, unitText, portionsByFdc);
   if (portionGramsPerUnit !== null) {
     return { grams: portionGramsPerUnit * quantity, source: "usda_portion", needsQuantity: false };
   }
@@ -157,7 +193,7 @@ function gramsForCandidate(
     }
     // No unit word, but a count was given ("2 eggs") — the food name
     // itself is the unit. Fall back to USDA's default portion for it.
-    const defaultGrams = findDefaultPortionGrams(fdcId);
+    const defaultGrams = findDefaultPortionGrams(fdcId, portionsByFdc);
     if (defaultGrams !== null) {
       return { grams: defaultGrams * quantity, source: "usda_portion", needsQuantity: false };
     }
@@ -298,13 +334,17 @@ type VariantFamily = { members: { candidate: FoodCandidate; per100g: Macro }[] }
 // fat, raw" entry. Returns null if no such cluster exists, which is the
 // common case (most ingredients — flour, garlic, onion — have exactly one
 // obvious match and no "which version" question to ask).
-function findVariantFamily(candidates: FoodCandidate[], searchName: string): VariantFamily | null {
+function findVariantFamily(
+  candidates: FoodCandidate[],
+  searchName: string,
+  nutrientsByFdc: NutrientsByFdc,
+): VariantFamily | null {
   const headWord = headWordOf(searchName);
   if (!headWord) return null;
 
   const topTier = candidates.filter((c) => headTierOf(c.match.description, headWord) === 3);
   const withMacros = topTier
-    .map((c) => ({ candidate: c, per100g: getMacrosPer100g(c.match.fdcId) }))
+    .map((c) => ({ candidate: c, per100g: getMacrosPer100g(c.match.fdcId, nutrientsByFdc) }))
     .filter((x): x is { candidate: FoodCandidate; per100g: Macro } => x.per100g !== null);
 
   const groups = new Map<string, { candidate: FoodCandidate; per100g: Macro }[]>();
@@ -326,7 +366,7 @@ function findVariantFamily(candidates: FoodCandidate[], searchName: string): Var
   return best ? { members: best } : null;
 }
 
-function variantOptionsFrom(family: VariantFamily, grams: number): VariantOption[] {
+function variantOptionsFrom(family: VariantFamily, grams: number, nutrientsByFdc: NutrientsByFdc): VariantOption[] {
   const factor = grams / 100;
   // Leanest first: ascending fat is exactly descending lean% (they're
   // complementary — 97% lean/3% fat has the least fat of the bunch), so
@@ -355,21 +395,27 @@ function variantOptionsFrom(family: VariantFamily, grams: number): VariantOption
         carbs: per100g.carbs * factor,
         fat: per100g.fat * factor,
       },
-      micros: scaleMicros(getMicrosPer100g(candidate.match.fdcId), grams),
+      micros: scaleMicros(getMicrosPer100g(candidate.match.fdcId, nutrientsByFdc), grams),
     });
     if (options.length >= MAX_VARIANT_OPTIONS) break;
   }
   return options;
 }
 
-export function resolveIngredientMacros(rawLine: string): IngredientMacroResult {
+export async function resolveIngredientMacros(rawLine: string): Promise<IngredientMacroResult> {
   const parsed = parseIngredientLine(rawLine);
-  const rawCandidates = findFoodCandidates(parsed.searchName);
+  const rawCandidates = await findFoodCandidates(parsed.searchName);
   const rankedCandidates = rankCandidates(rawCandidates, parsed.searchName);
   const quantity = parsed.quantity ?? 1;
   const hasExplicitQuantity = parsed.quantity !== null;
 
-  const family = findVariantFamily(rankedCandidates, parsed.searchName);
+  const fdcIds = [...new Set(rankedCandidates.map((c) => c.match.fdcId))];
+  const [nutrientsByFdc, portionsByFdc] = await Promise.all([
+    getNutrientRowsBulk(fdcIds),
+    getPortionsBulk(fdcIds),
+  ]);
+
+  const family = findVariantFamily(rankedCandidates, parsed.searchName, nutrientsByFdc);
 
   // When a composition family exists (ground beef's lean/fat% siblings),
   // try its members first — a plain "80% lean" match is a better default
@@ -390,7 +436,7 @@ export function resolveIngredientMacros(rawLine: string): IngredientMacroResult 
     | null = null;
 
   for (const candidate of candidates) {
-    const per100g = getMacrosPer100g(candidate.match.fdcId);
+    const per100g = getMacrosPer100g(candidate.match.fdcId, nutrientsByFdc);
     if (!per100g) continue; // no usable proximate data — try the next candidate
 
     const outcome = gramsForCandidate(
@@ -398,6 +444,7 @@ export function resolveIngredientMacros(rawLine: string): IngredientMacroResult 
       parsed.unitText,
       quantity,
       hasExplicitQuantity,
+      portionsByFdc,
     );
     if (outcome.grams === null) {
       // A real ingredient match, but no way to responsibly convert its
@@ -430,8 +477,8 @@ export function resolveIngredientMacros(rawLine: string): IngredientMacroResult 
         carbs: per100g.carbs * factor,
         fat: per100g.fat * factor,
       },
-      micros: scaleMicros(getMicrosPer100g(candidate.match.fdcId), outcome.grams),
-      variantOptions: family ? variantOptionsFrom(family, outcome.grams) : [],
+      micros: scaleMicros(getMicrosPer100g(candidate.match.fdcId, nutrientsByFdc), outcome.grams),
+      variantOptions: family ? variantOptionsFrom(family, outcome.grams, nutrientsByFdc) : [],
     };
   }
 
@@ -476,11 +523,16 @@ export type RecipeMacroEstimate = {
 // estimate) — ingredientResults lets the caller show which lines that was
 // true for, so the numbers are shown as what they are: a partial estimate
 // from what could be resolved, not a guarantee every ingredient counted.
-export function estimateRecipeMacros(
+//
+// Resolved in parallel (Promise.all) rather than one at a time — each
+// ingredient's resolution is itself a handful of sequential D1 round
+// trips, and doing 10 ingredients one after another would otherwise add
+// up to a very slow request.
+export async function estimateRecipeMacros(
   ingredients: string[],
   servings: number | null,
-): RecipeMacroEstimate {
-  const ingredientResults = ingredients.map(resolveIngredientMacros);
+): Promise<RecipeMacroEstimate> {
+  const ingredientResults = await Promise.all(ingredients.map(resolveIngredientMacros));
   const resolvedCount = ingredientResults.filter((r) => r.macros !== null).length;
 
   if (resolvedCount === 0) {
@@ -515,11 +567,11 @@ export type RecipeMacroEstimateApi = {
 
 // Same as estimateRecipeMacros, shaped for the API response — using the
 // exported (not internal) result types.
-export function estimateRecipeMacrosForApi(
+export async function estimateRecipeMacrosForApi(
   ingredients: string[],
   servings: number | null,
-): RecipeMacroEstimateApi {
-  const { perServing, perServingMicros, ingredientResults } = estimateRecipeMacros(
+): Promise<RecipeMacroEstimateApi> {
+  const { perServing, perServingMicros, ingredientResults } = await estimateRecipeMacros(
     ingredients,
     servings,
   );
@@ -550,15 +602,20 @@ export function estimateRecipeMacrosForApi(
 // USDA id and a user-supplied quantity + unit (from a controlled dropdown,
 // so never a vague container word), compute that ingredient's absolute
 // macro contribution.
-export function resolveKnownFoodMacros(
+export async function resolveKnownFoodMacros(
   fdcId: number,
   quantity: number,
   unitText: string | null,
-): { grams: number; macros: Macro; micros: MicroTotals } | { error: string } {
-  const per100g = getMacrosPer100g(fdcId);
+): Promise<{ grams: number; macros: Macro; micros: MicroTotals } | { error: string }> {
+  const [nutrientsByFdc, portionsByFdc] = await Promise.all([
+    getNutrientRowsBulk([fdcId]),
+    getPortionsBulk([fdcId]),
+  ]);
+
+  const per100g = getMacrosPer100g(fdcId, nutrientsByFdc);
   if (!per100g) return { error: "This food doesn't have usable nutrition data." };
 
-  const outcome = gramsForCandidate(fdcId, unitText, quantity, true);
+  const outcome = gramsForCandidate(fdcId, unitText, quantity, true, portionsByFdc);
   if (outcome.grams === null) {
     return { error: "Couldn't convert that amount — try a different unit (grams or ounces always work)." };
   }
@@ -572,7 +629,7 @@ export function resolveKnownFoodMacros(
       carbs: per100g.carbs * factor,
       fat: per100g.fat * factor,
     },
-    micros: scaleMicros(getMicrosPer100g(fdcId), outcome.grams),
+    micros: scaleMicros(getMicrosPer100g(fdcId, nutrientsByFdc), outcome.grams),
   };
 }
 
