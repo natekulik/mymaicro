@@ -66,15 +66,19 @@ type Override = Partial<
   >
 >;
 
-// A hand-typed nutrition entry for an ingredient with no USDA match at
-// all. Calories is required to be usable; protein/carbs/fat are optional
-// and stay `null` until the user fills them in via the "Add macros"
-// sub-form, so incomplete entries can be detected and flagged.
+// A hand-typed nutrition entry, entered per serving via the "Edit
+// manually" modal — for an ingredient with no USDA match at all, or to
+// override one that matched but looks wrong (see the Cloudflare D1
+// migration's known matching edge cases). Calories is required to be
+// usable; protein/carbs/fat and every micro are optional and stay
+// unset until the user fills them in, so an incomplete entry can still
+// be detected and flagged rather than silently treated as all-zero.
 type ManualEntry = {
   calories: number;
   protein: number | null;
   carbs: number | null;
   fat: number | null;
+  micros: MicroTotals; // sparse — only keys the user actually filled in
 };
 
 const RECOMPUTE_UNITS = [
@@ -282,12 +286,14 @@ export default function RecipeAnalysis() {
     return result.ingredientDetails.map((d, i) => {
       const merged = { ...d, ...overrides[i] };
       const entry = manualEntries[i];
-      // Only fills a gap — a real USDA match (or a resolved quantity) never
-      // gets overwritten by a hand-typed entry. Protein/carbs/fat default
-      // to 0 here (for the totals) even when the user hasn't filled them
-      // in yet — `hasIncompleteManualMacros` below is what surfaces that
-      // gap to the user, rather than silently under-counting forever.
-      if (entry !== undefined && merged.macros === null) {
+      // A manual entry always wins once it exists — including replacing a
+      // real USDA match the user decided was wrong, not just filling a
+      // gap where there was none. Protein/carbs/fat default to 0 here
+      // (for the totals) even when the user left them blank —
+      // `hasIncompleteManualMacros` below is what surfaces that gap,
+      // rather than silently under-counting forever. Micros stay sparse,
+      // same convention as a real match: only keys actually present.
+      if (entry !== undefined) {
         const multiplier = hasValidServings ? effectiveServings! : 1;
         merged.macros = {
           calories: entry.calories * multiplier,
@@ -295,6 +301,13 @@ export default function RecipeAnalysis() {
           carbs: (entry.carbs ?? 0) * multiplier,
           fat: (entry.fat ?? 0) * multiplier,
         };
+        if (Object.keys(entry.micros).length > 0) {
+          const scaledMicros: MicroTotals = {};
+          for (const [key, value] of Object.entries(entry.micros)) {
+            scaledMicros[key] = value * multiplier;
+          }
+          merged.micros = scaledMicros;
+        }
       }
       return merged;
     });
@@ -411,26 +424,20 @@ export default function RecipeAnalysis() {
     }));
   }
 
-  function applyManualCalories(index: number, caloriesPerServing: number) {
-    setManualEntries((prev) => ({
-      ...prev,
-      [index]: {
-        calories: caloriesPerServing,
-        protein: prev[index]?.protein ?? null,
-        carbs: prev[index]?.carbs ?? null,
-        fat: prev[index]?.fat ?? null,
-      },
-    }));
+  // The "Edit manually" modal applies everything (calories, macros,
+  // micros) as one atomic confirm — there's no partial-apply path, so
+  // unlike the variant/quantity overrides above this is a single setter.
+  function applyManualEntry(index: number, entry: ManualEntry) {
+    setManualEntries((prev) => ({ ...prev, [index]: entry }));
   }
 
-  function applyManualMacros(
-    index: number,
-    macros: { protein: number; carbs: number; fat: number },
-  ) {
-    setManualEntries((prev) => ({
-      ...prev,
-      [index]: { calories: prev[index]?.calories ?? 0, ...macros },
-    }));
+  function clearManualEntry(index: number) {
+    setManualEntries((prev) => {
+      if (!(index in prev)) return prev;
+      const next = { ...prev };
+      delete next[index];
+      return next;
+    });
   }
 
   // Only callable once both macrosReady and microsReady are true (see the
@@ -722,8 +729,9 @@ export default function RecipeAnalysis() {
               onVariantConfirm={confirmVariant}
               onQuantityResolved={applyQuantity}
               manualEntries={manualEntries}
-              onManualCaloriesChange={applyManualCalories}
-              onManualMacrosChange={applyManualMacros}
+              onApplyManualEntry={applyManualEntry}
+              onClearManualEntry={clearManualEntry}
+              servingsForPrefill={hasValidServings ? effectiveServings! : 1}
             />
           )}
 
@@ -932,8 +940,9 @@ function IngredientBreakdown({
   onVariantConfirm,
   onQuantityResolved,
   manualEntries,
-  onManualCaloriesChange,
-  onManualMacrosChange,
+  onApplyManualEntry,
+  onClearManualEntry,
+  servingsForPrefill,
 }: {
   details: IngredientMacroDetail[];
   confirmedVariants: Record<number, boolean>;
@@ -941,9 +950,13 @@ function IngredientBreakdown({
   onVariantConfirm: (index: number) => void;
   onQuantityResolved: (index: number, grams: number, macros: NutritionMacro, micros: MicroTotals) => void;
   manualEntries: Record<number, ManualEntry>;
-  onManualCaloriesChange: (index: number, caloriesPerServing: number) => void;
-  onManualMacrosChange: (index: number, macros: { protein: number; carbs: number; fat: number }) => void;
+  onApplyManualEntry: (index: number, entry: ManualEntry) => void;
+  onClearManualEntry: (index: number) => void;
+  servingsForPrefill: number;
 }) {
+  // Index of the ingredient whose "Edit manually" modal is open, if any —
+  // one shared modal instance rather than one per row.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const matched = details.filter((d) => d.grams !== null).length;
   // Which nutrient every per-ingredient bar below currently measures —
   // see BAR_VIEW_CONFIG above.
@@ -1006,6 +1019,7 @@ function IngredientBreakdown({
   }
 
   return (
+    <>
     <details
       open
       id="ingredient-breakdown"
@@ -1131,17 +1145,67 @@ function IngredientBreakdown({
               )}
 
               {isUnmatched(d) && (
-                <ManualCaloriesPrompt
-                  savedEntry={manualEntries[i]}
-                  onSaveCalories={(calories) => onManualCaloriesChange(i, calories)}
-                  onSaveMacros={(macros) => onManualMacrosChange(i, macros)}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-zinc-400">
+                    Not in the USDA database.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setEditingIndex(i)}
+                    className="whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-400"
+                  >
+                    {manualEntries[i] ? "Edit manual entry" : "+ Add nutrition manually"}
+                  </button>
+                  {manualEntries[i] !== undefined && (
+                    <button
+                      type="button"
+                      onClick={() => onClearManualEntry(i)}
+                      className="text-xs text-zinc-400 transition hover:text-rose-500"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {!isUnmatched(d) && !d.needsQuantity && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingIndex(i)}
+                    className="whitespace-nowrap text-xs font-medium text-zinc-400 underline decoration-dotted transition hover:text-zinc-600 dark:hover:text-zinc-300"
+                  >
+                    {manualEntries[i] !== undefined ? "Custom values — edit" : "Edit manually"}
+                  </button>
+                  {manualEntries[i] !== undefined && (
+                    <button
+                      type="button"
+                      onClick={() => onClearManualEntry(i)}
+                      className="text-xs text-zinc-400 transition hover:text-rose-500"
+                    >
+                      Revert to match
+                    </button>
+                  )}
+                </div>
               )}
             </li>
           );
         })}
       </ul>
     </details>
+    {editingIndex !== null && (
+      <EditManuallyModal
+        detail={details[editingIndex]}
+        savedEntry={manualEntries[editingIndex]}
+        servingsForPrefill={servingsForPrefill}
+        onCancel={() => setEditingIndex(null)}
+        onConfirm={(entry) => {
+          onApplyManualEntry(editingIndex, entry);
+          setEditingIndex(null);
+        }}
+      />
+    )}
+    </>
   );
 }
 
@@ -1188,6 +1252,17 @@ function StatusBadge({
   detail: IngredientMacroDetail;
   manualEntry?: ManualEntry;
 }) {
+  // Checked first: a manual entry on top of a real match means the user
+  // decided that match was wrong and overrode it — worth calling out
+  // distinctly from both "matched" (never touched) and "added manually"
+  // (no match existed to override in the first place).
+  if (manualEntry !== undefined && detail.matchedDescription) {
+    return (
+      <span className="whitespace-nowrap font-medium text-violet-600 dark:text-violet-400">
+        custom
+      </span>
+    );
+  }
   if (detail.needsQuantity) {
     return (
       <span className="whitespace-nowrap font-medium text-amber-600 dark:text-amber-400">
@@ -1381,128 +1456,223 @@ function QuantityPrompt({
   );
 }
 
-function ManualCaloriesPrompt({
+function roundTo(n: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  return Math.round(n * factor) / factor;
+}
+
+const MODAL_FIELD_INPUT =
+  "w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600";
+const MODAL_MICRO_INPUT =
+  "w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:focus:border-zinc-600";
+
+// Pop-up editor for one ingredient's full nutrition — used both for an
+// ingredient with no USDA match at all, and to override one that matched
+// but looks wrong (see the matching edge cases found while verifying
+// against known reference values after the Cloudflare D1 migration).
+// Deliberately a modal rather than an inline sub-form: this covers up to
+// 27 fields (4 macros + 23 micros), which can't fit cleanly inside a
+// single ingredient row, and an explicit Cancel/Confirm step — rather
+// than an auto-save-as-you-type sub-form — means a value never gets
+// applied without the user deliberately confirming it replaces the
+// match.
+function EditManuallyModal({
+  detail,
   savedEntry,
-  onSaveCalories,
-  onSaveMacros,
+  servingsForPrefill,
+  onCancel,
+  onConfirm,
 }: {
+  detail: IngredientMacroDetail;
   savedEntry: ManualEntry | undefined;
-  onSaveCalories: (caloriesPerServing: number) => void;
-  onSaveMacros: (macros: { protein: number; carbs: number; fat: number }) => void;
+  servingsForPrefill: number;
+  onCancel: () => void;
+  onConfirm: (entry: ManualEntry) => void;
 }) {
-  const [amount, setAmount] = useState(savedEntry ? String(savedEntry.calories) : "");
-  const [macrosOpen, setMacrosOpen] = useState(false);
-  const [protein, setProtein] = useState(savedEntry?.protein != null ? String(savedEntry.protein) : "");
-  const [carbs, setCarbs] = useState(savedEntry?.carbs != null ? String(savedEntry.carbs) : "");
-  const [fat, setFat] = useState(savedEntry?.fat != null ? String(savedEntry.fat) : "");
+  // Seeded from a saved manual entry if one's being re-edited; otherwise
+  // from the ingredient's current matched per-serving contribution (its
+  // own macros/micros are whole-recipe totals, so divided back down to
+  // per serving) — so correcting a wrong match starts from its own
+  // numbers rather than a blank form.
+  const seed = (() => {
+    if (savedEntry) return savedEntry;
+    if (!detail.macros) return null;
+    const micros: MicroTotals = {};
+    if (detail.micros) {
+      for (const [key, value] of Object.entries(detail.micros)) {
+        micros[key] = value / servingsForPrefill;
+      }
+    }
+    return {
+      calories: (detail.macros.calories ?? 0) / servingsForPrefill,
+      protein: detail.macros.protein != null ? detail.macros.protein / servingsForPrefill : null,
+      carbs: detail.macros.carbs != null ? detail.macros.carbs / servingsForPrefill : null,
+      fat: detail.macros.fat != null ? detail.macros.fat / servingsForPrefill : null,
+      micros,
+    };
+  })();
 
-  const hasMacros = savedEntry?.protein != null || savedEntry?.carbs != null || savedEntry?.fat != null;
+  const [calories, setCalories] = useState(seed?.calories != null ? String(roundTo(seed.calories, 0)) : "");
+  const [protein, setProtein] = useState(seed?.protein != null ? String(roundTo(seed.protein, 1)) : "");
+  const [carbs, setCarbs] = useState(seed?.carbs != null ? String(roundTo(seed.carbs, 1)) : "");
+  const [fat, setFat] = useState(seed?.fat != null ? String(roundTo(seed.fat, 1)) : "");
+  const [microValues, setMicroValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const def of MICRO_NUTRIENTS) {
+      const v = seed?.micros[def.key];
+      if (v != null) init[def.key] = String(roundTo(v, 2));
+    }
+    return init;
+  });
+  const [error, setError] = useState<string | null>(null);
 
-  function handleCaloriesSubmit(e: FormEvent) {
-    e.preventDefault();
-    const calories = Number(amount);
-    if (!calories || calories <= 0) return;
-    onSaveCalories(calories);
+  function updateMicro(key: string, value: string) {
+    setMicroValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  function handleMacrosSubmit(e: FormEvent) {
+  function handleConfirm(e: FormEvent) {
     e.preventDefault();
-    onSaveMacros({
-      protein: Number(protein) || 0,
-      carbs: Number(carbs) || 0,
-      fat: Number(fat) || 0,
+    const cal = Number(calories);
+    if (!calories.trim() || Number.isNaN(cal) || cal <= 0) {
+      setError("Enter a calorie value to continue — it's the one field every total depends on.");
+      return;
+    }
+    const micros: MicroTotals = {};
+    for (const def of MICRO_NUTRIENTS) {
+      const raw = microValues[def.key];
+      if (raw !== undefined && raw.trim() !== "") {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) micros[def.key] = n;
+      }
+    }
+    onConfirm({
+      calories: cal,
+      protein: protein.trim() ? Number(protein) : null,
+      carbs: carbs.trim() ? Number(carbs) : null,
+      fat: fat.trim() ? Number(fat) : null,
+      micros,
     });
-    setMacrosOpen(false);
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        Not in the USDA database — add its nutrition by hand to include it in the totals.
-      </span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <form onSubmit={handleCaloriesSubmit} className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-1.5 dark:bg-amber-950/40">
-          <input
-            type="number"
-            min={0}
-            step="any"
-            placeholder="Calories"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="w-20 rounded-md border border-amber-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none dark:border-amber-900 dark:bg-zinc-900 dark:text-zinc-200"
-          />
-          <span className="whitespace-nowrap text-xs text-amber-600 dark:text-amber-400">
-            cals per serving
-          </span>
-          <button
-            type="submit"
-            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600"
-          >
-            {savedEntry ? "Update" : "Add"}
-          </button>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <form onSubmit={handleConfirm} className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-zinc-100 p-5 dark:border-zinc-800">
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              Edit nutrition manually
+            </h2>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {detail.raw}
+              {detail.matchedDescription && (
+                <>
+                  {" — currently matched to "}
+                  <span className="italic">{detail.matchedDescription}</span>.
+                </>
+              )}
+              {" These values are per serving, and replace that match for this ingredient once confirmed."}
+            </p>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Calories *</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={calories}
+                  onChange={(e) => setCalories(e.target.value)}
+                  className={MODAL_FIELD_INPUT}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Protein (g)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={protein}
+                  onChange={(e) => setProtein(e.target.value)}
+                  className={MODAL_FIELD_INPUT}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Carbs (g)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={carbs}
+                  onChange={(e) => setCarbs(e.target.value)}
+                  className={MODAL_FIELD_INPUT}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Fat (g)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={fat}
+                  onChange={(e) => setFat(e.target.value)}
+                  className={MODAL_FIELD_INPUT}
+                />
+              </label>
+            </div>
+
+            <div className="mt-5">
+              <h3 className="text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+                Micronutrients (optional)
+              </h3>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                {MICRO_NUTRIENTS.map((def) => (
+                  <label key={def.key} className="flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+                      {def.label} ({def.unit})
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={microValues[def.key] ?? ""}
+                      onChange={(e) => updateMicro(def.key, e.target.value)}
+                      className={MODAL_MICRO_INPUT}
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {error && <p className="mt-3 text-xs text-rose-600 dark:text-rose-400">{error}</p>}
+          </div>
+
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-100 p-4 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-full border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              Confirm
+            </button>
+          </div>
         </form>
-        <button
-          type="button"
-          onClick={() => setMacrosOpen((open) => !open)}
-          className="whitespace-nowrap rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-        >
-          {hasMacros ? "Edit macros" : "+ Add macros"}
-        </button>
-        {hasMacros && !macrosOpen && (
-          <span className="text-xs text-zinc-400">
-            Protein {savedEntry?.protein ?? 0}g · Carbs {savedEntry?.carbs ?? 0}g · Fat {savedEntry?.fat ?? 0}g
-          </span>
-        )}
       </div>
-      {macrosOpen && (
-        <form
-          onSubmit={handleMacrosSubmit}
-          className="flex flex-wrap items-center gap-2 rounded-lg bg-zinc-50 px-2.5 py-2 dark:bg-zinc-800"
-        >
-          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
-            Protein
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={protein}
-              onChange={(e) => setProtein(e.target.value)}
-              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-            />
-            g
-          </label>
-          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
-            Carbs
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={carbs}
-              onChange={(e) => setCarbs(e.target.value)}
-              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-            />
-            g
-          </label>
-          <label className="flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
-            Fat
-            <input
-              type="number"
-              min={0}
-              step="any"
-              value={fat}
-              onChange={(e) => setFat(e.target.value)}
-              className="w-14 rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-            />
-            g
-          </label>
-          <button
-            type="submit"
-            className="rounded-md bg-zinc-700 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-zinc-600 dark:bg-zinc-600 dark:hover:bg-zinc-500"
-          >
-            Save
-          </button>
-        </form>
-      )}
     </div>
   );
 }
