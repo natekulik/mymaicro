@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import * as cheerio from "cheerio";
 import { estimateRecipeMacrosForApi } from "@/lib/usda/resolve";
+import { ensureUsdaDbReady } from "@/lib/usda/db";
 import type { MicroTotals, NutritionMacro, RecipeResult } from "@/lib/recipe-types";
 
 // schema.org/Recipe's NutritionInformation can carry a handful of micros
@@ -17,6 +18,10 @@ const PUBLISHED_MICRO_FIELDS: { field: string; key: string }[] = [
 ];
 
 export const runtime = "nodejs";
+// Generous headroom for the one-time cold-start download of the ~1GB USDA
+// database from R2 (see lib/usda/db.ts) — subsequent requests on the same
+// warm instance skip the download and return in normal time.
+export const maxDuration = 60;
 
 // Basic SSRF guard: this endpoint fetches whatever URL a user pastes in, so
 // refuse anything that isn't a public http(s) address before we touch it.
@@ -187,6 +192,7 @@ export async function POST(request: Request) {
   // see PUBLISHED_MICRO_FIELDS above), so the ingredient-matching pass
   // always runs regardless of whether macros were published — it's the
   // only way to get the full micronutrient panel, same as Manual Entry.
+  await ensureUsdaDbReady();
   const { estimatedNutrition, estimatedMicros, ingredientDetails } = estimateRecipeMacrosForApi(
     ingredients,
     servings,

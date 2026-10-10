@@ -41,9 +41,12 @@ yarn-error.log*
 next-env.d.ts
 
 # USDA source downloads — large, easily regenerated with
-# `node scripts/import-usda.mjs`. The built data/usda/foods.db it produces
-# IS committed — that's the actual runtime artifact the app queries.
+# `node scripts/import-usda.mjs`. The built foods.db is no longer committed
+# either — now that it includes Branded Foods it's ~1GB, over GitHub's file
+# size limit. It's uploaded to Cloudflare R2 instead (scripts/upload-usda-db.mjs)
+# and downloaded at runtime (lib/usda/db.ts) — see USDA_DB_URL in env.example.
 /data/usda/raw/
 /data/usda/extracted/
+/data/usda/foods.db
 /data/usda/foods.db-shm
 /data/usda/foods.db-wal

@@ -29,7 +29,7 @@ export type IngredientMacroDetail = {
   raw: string;
   fdcId: number | null;
   matchedDescription: string | null;
-  matchSource: "foundation" | "sr_legacy" | null;
+  matchSource: "foundation" | "sr_legacy" | "branded" | null;
   matchConfidence: "high" | "low" | "none";
   grams: number | null;
   gramsSource: "usda_portion" | "unit_conversion" | "unresolved";

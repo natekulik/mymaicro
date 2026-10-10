@@ -1007,7 +1007,13 @@ function IngredientBreakdown({
                   matched: {d.matchedDescription}
                   {d.grams !== null && <> — {Math.round(d.grams)}g</>}
                   {d.matchSource &&
-                    ` (${d.matchSource === "foundation" ? "USDA Foundation" : "USDA SR Legacy"})`}
+                    ` (${
+                      d.matchSource === "foundation"
+                        ? "USDA Foundation"
+                        : d.matchSource === "sr_legacy"
+                          ? "USDA SR Legacy"
+                          : "USDA Branded"
+                    })`}
                 </span>
               )}
 

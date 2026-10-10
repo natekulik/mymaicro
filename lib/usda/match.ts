@@ -1,6 +1,6 @@
 import { getUsdaDb } from "./db";
 
-export type FoodSource = "foundation" | "sr_legacy";
+export type FoodSource = "foundation" | "sr_legacy" | "branded";
 
 export type FoodMatch = {
   fdcId: number;
@@ -18,7 +18,12 @@ type MatchRow = { fdcId: number; description: string; source: FoodSource };
 // for essentially everything — some Foundation Foods entries only carry
 // detailed micronutrient analyte panels with no rolled-up macros, which is
 // why the caller needs more than one candidate to fall back through).
-const SOURCE_PRIORITY: FoodSource[] = ["foundation", "sr_legacy"];
+// Branded goes last — a recipe ingredient line is almost always generic
+// ("olive oil", not "Wesson Vegetable Oil 1 GAL"), so a clean generic match
+// should win by default; branded only matters when a recipe actually names
+// a specific product, which is exactly when it'll out-rank a weak generic
+// candidate anyway via the relevance re-ranking below.
+const SOURCE_PRIORITY: FoodSource[] = ["foundation", "sr_legacy", "branded"];
 // Wide enough that the category-tier re-ranking in resolve.ts (which picks
 // the best of these, not just the top bm25 hit) has real candidates to
 // work with — plain "Onions, raw" can rank outside bm25's top 5 for the
