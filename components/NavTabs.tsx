@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { useUser } from "@/lib/supabase/use-user";
 
 // `short` is what renders below the `lg` breakpoint (1024px) — six full
 // labels, "Macro & Micro Analysis" especially, don't fit on one line
@@ -25,21 +26,21 @@ const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/forgot-username",
 export default function NavTabs() {
   const pathname = usePathname();
   const router = useRouter();
+  const { user } = useUser();
   const [username, setUsername] = useState<string | null>(null);
   const isAuthPage = AUTH_PATHS.includes(pathname);
 
   useEffect(() => {
-    if (isAuthPage) return;
     (async () => {
+      if (!user) {
+        setUsername(null);
+        return;
+      }
       const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
       const { data } = await supabase.from("profiles").select("username").eq("id", user.id).maybeSingle();
       setUsername(data?.username ?? null);
     })();
-  }, [isAuthPage]);
+  }, [user]);
 
   async function handleLogOut() {
     const supabase = createClient();
@@ -81,7 +82,7 @@ export default function NavTabs() {
             </nav>
           )}
         </div>
-        {!isAuthPage && (
+        {!isAuthPage && user && (
           <div className="flex shrink-0 items-center gap-1.5 lg:gap-2">
             <div className="flex items-center gap-1.5 rounded-full border border-zinc-200 py-1 pl-1 pr-2 dark:border-zinc-700 lg:gap-2 lg:py-1.5 lg:pl-1.5 lg:pr-3">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-[10px] font-semibold text-white dark:bg-zinc-50 dark:text-zinc-900 lg:h-6 lg:w-6 lg:text-xs">
@@ -98,6 +99,22 @@ export default function NavTabs() {
             >
               Log out
             </button>
+          </div>
+        )}
+        {!isAuthPage && !user && (
+          <div className="flex shrink-0 items-center gap-1.5 lg:gap-2">
+            <Link
+              href="/login"
+              className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 lg:px-3 lg:py-1.5 lg:text-xs"
+            >
+              Log in
+            </Link>
+            <Link
+              href="/signup"
+              className="whitespace-nowrap rounded-full bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200 lg:px-3 lg:py-1.5 lg:text-xs"
+            >
+              Sign up
+            </Link>
           </div>
         )}
       </div>

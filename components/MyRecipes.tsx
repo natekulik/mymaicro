@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import AccountRequiredPage from "./AccountRequiredPage";
 import { loadSavedRecipes, removeSavedRecipe, type SavedRecipe } from "@/lib/saved-recipes";
+import { useUser } from "@/lib/supabase/use-user";
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
 import {
   DAY_NAMES,
@@ -52,6 +54,7 @@ function useCloseOnOutsideClick<T extends HTMLElement>(open: boolean, onClose: (
 }
 
 export default function MyRecipes() {
+  const { user, loading: userLoading } = useUser();
   const [recipes, setRecipes] = useState<SavedRecipe[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [template, setTemplate] = useState<WeeklyPlan | null>(null);
@@ -65,8 +68,20 @@ export default function MyRecipes() {
   // Which group's pill is active as a filter — null shows every recipe.
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
+  // This whole page is about saved data — a guest has none, so there's
+  // nothing useful to load. The account-required early return below
+  // (after all hooks, per the rules of hooks) replaces the rest of the
+  // page entirely for guests, rather than rendering it against fake
+  // local state that would vanish on refresh anyway.
+  const loadedOnceRef = useRef(false);
   useEffect(() => {
+    if (userLoading || loadedOnceRef.current) return;
+    loadedOnceRef.current = true;
     (async () => {
+      if (!user) {
+        setLoaded(true);
+        return;
+      }
       const [loadedRecipes, loadedTemplate, loadedOverrides, loadedGroups, loadedAssignments] = await Promise.all([
         loadSavedRecipes(),
         loadWeeklyPlan(),
@@ -82,7 +97,7 @@ export default function MyRecipes() {
       setGroupAssignments(loadedAssignments);
       setLoaded(true);
     })();
-  }, []);
+  }, [userLoading, user]);
 
   useEffect(() => {
     if (weekOverrides) void saveWeekOverrides(weekOverrides);
@@ -127,6 +142,15 @@ export default function MyRecipes() {
     ? recipes.filter((r) => (groupAssignments?.[r.id] ?? []).includes(selectedGroupId))
     : recipes;
   const selectedGroupName = groups.find((g) => g.id === selectedGroupId)?.name;
+
+  if (!userLoading && !user) {
+    return (
+      <AccountRequiredPage
+        title="My recipes"
+        description="Create a free account to save recipes from Macro & Micro analysis and organize them into groups."
+      />
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-12">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   addMeal as addMealInDays,
   addSubsection as addSubsectionInDays,
@@ -38,6 +38,8 @@ import {
 } from "@/lib/history";
 import ProgressRow from "./ProgressRow";
 import HistoricalPlan from "./HistoricalPlan";
+import AccountRequiredPage from "./AccountRequiredPage";
+import { useUser } from "@/lib/supabase/use-user";
 
 // Snapshot for the one-level "paste to all days" undo — tagged with the
 // week it applies to, so navigating to a different week and back doesn't
@@ -46,6 +48,7 @@ import HistoricalPlan from "./HistoricalPlan";
 type PasteUndoSnapshot = { weekStart: string; days: DayPlan[] };
 
 export default function WeeklyPlan() {
+  const { user, loading: userLoading } = useUser();
   const [template, setTemplate] = useState<WeeklyPlanData | null>(null);
   const [weekOverrides, setWeekOverrides] = useState<WeekOverrides | null>(null);
   // Monday ("YYYY-MM-DD") of whichever week is currently being viewed —
@@ -92,7 +95,14 @@ export default function WeeklyPlan() {
   // animation to play against each time.
   const [slideDirection, setSlideDirection] = useState<"next" | "prev" | null>(null);
 
+  // This page is about saved weekly plans — a guest has none, so the
+  // account-required branch below (after all hooks, per the rules of
+  // hooks) replaces it entirely rather than loading anything.
+  const loadedOnceRef = useRef(false);
   useEffect(() => {
+    if (userLoading || loadedOnceRef.current) return;
+    loadedOnceRef.current = true;
+    if (!user) return;
     (async () => {
       const [loadedTemplate, loadedOverrides, loadedPresets, loadedRecipes, profile, loadedMacroPresets] =
         await Promise.all([
@@ -115,13 +125,22 @@ export default function WeeklyPlan() {
       setToday(todayStr);
       setWeekStart(mondayOfDate(todayStr));
     })();
-  }, []);
+  }, [userLoading, user]);
 
   useEffect(() => {
     if (weekOverrides) void saveWeekOverrides(weekOverrides);
   }, [weekOverrides]);
 
   const ready = template !== null && weekOverrides !== null && weekStart !== null && today !== null;
+
+  if (!userLoading && !user) {
+    return (
+      <AccountRequiredPage
+        title="Weekly plan"
+        description="Create a free account to plan your meals across the week and track against your macro targets."
+      />
+    );
+  }
 
   if (!ready) {
     return (

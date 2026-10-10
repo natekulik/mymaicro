@@ -1,15 +1,12 @@
 // Keeps the Supabase auth session cookie fresh on every request (tokens
-// expire and need silent renewal), and gates every page except the auth
-// pages themselves behind being logged in. All app data now lives in
-// Supabase under Row Level Security, so an unauthenticated visitor
-// couldn't load anything useful anyway — redirecting them straight to
-// /login is clearer than showing a page full of empty states.
+// expire and need silent renewal). Pages are NOT gated here — guests can
+// browse and use the app freely; individual pages/components decide for
+// themselves what needs an account (see lib/supabase/use-user.ts and
+// components/SignUpPrompt.tsx), showing a "create an account" prompt
+// only when a guest tries to actually save something.
 
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-
-// Reachable while signed out — everything else requires a session.
-const PUBLIC_PATHS = ["/login", "/signup", "/forgot-password", "/forgot-username", "/reset-password"];
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -37,20 +34,16 @@ export async function updateSession(request: NextRequest) {
   // Components can't set cookies themselves. Deliberately getUser(), not
   // getSession(): it revalidates against Supabase's auth server rather
   // than trusting a locally-decoded cookie, which is what actually makes
-  // this check trustworthy for gating pages.
+  // this check trustworthy for the one redirect still done here below.
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   const path = request.nextUrl.pathname;
-  const isPublicPath = PUBLIC_PATHS.includes(path) || path.startsWith("/api/forgot-username");
 
-  if (!user && !isPublicPath) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
-
+  // The only redirect left: an already-logged-in visitor landing on
+  // /login or /signup gets sent to the app instead of a form they don't
+  // need. Nothing else is gated — see the file header above.
   if (user && (path === "/login" || path === "/signup")) {
     const url = request.nextUrl.clone();
     url.pathname = "/";

@@ -6,6 +6,7 @@ import {
   type MacroColors,
   type MacroProfile,
   calories,
+  defaultProfile,
   macroMatchStatus,
   newId,
   splitEvenly,
@@ -19,14 +20,17 @@ import {
   type MacroPreset,
 } from "@/lib/macro-presets";
 import { loadProfile, saveProfile } from "@/lib/storage";
+import { useUser } from "@/lib/supabase/use-user";
 import MealCard from "./MealCard";
 import NumberField from "./NumberField";
 import ProgressRow from "./ProgressRow";
+import SignUpPrompt from "./SignUpPrompt";
 
 const MIN_MEALS = 1;
 const MAX_MEALS = 8;
 
 export default function MacroSettings() {
+  const { user, loading: userLoading } = useUser();
   const [profile, setProfile] = useState<MacroProfile | null>(null);
   const [colorsOpen, setColorsOpen] = useState(false);
   // Saved macro presets ("+ Add Macro Preset" / "My Macro Presets") —
@@ -37,20 +41,32 @@ export default function MacroSettings() {
   const [presetsOpen, setPresetsOpen] = useState(false);
   // Two-click confirm for applying a preset, keyed by preset id.
   const [presetArmedId, setPresetArmedId] = useState<string | null>(null);
+  const [signUpPromptOpen, setSignUpPromptOpen] = useState(false);
 
-  // Load once on mount.
+  // Load once, as soon as we know whether there's a real account — guests
+  // get a local-only default profile (nothing ever hits Supabase for
+  // them) so they can freely explore the calculator without one.
+  const loadedOnceRef = useRef(false);
   useEffect(() => {
+    if (userLoading || loadedOnceRef.current) return;
+    loadedOnceRef.current = true;
     (async () => {
+      if (!user) {
+        setProfile(defaultProfile());
+        setPresets([]);
+        return;
+      }
       const [loadedProfile, loadedPresets] = await Promise.all([loadProfile(), loadMacroPresets()]);
       setProfile(loadedProfile);
       setPresets(loadedPresets);
     })();
-  }, []);
+  }, [userLoading, user]);
 
-  // Autosave on every change.
+  // Autosave on every change — guests edit purely in local state, since
+  // there's no account to save to (saveProfile would just throw).
   useEffect(() => {
-    if (profile) void saveProfile(profile);
-  }, [profile]);
+    if (profile && user) void saveProfile(profile);
+  }, [profile, user]);
 
   if (!profile) {
     return (
@@ -113,6 +129,11 @@ export default function MacroSettings() {
 
   async function handleSavePreset(name: string) {
     if (!profile) return;
+    if (!user) {
+      setSaveOpen(false);
+      setSignUpPromptOpen(true);
+      return;
+    }
     const preset = await saveMacroPreset(name, profile.dailyTarget, profile.meals);
     setPresets((prev) => [preset, ...prev]);
     setSaveOpen(false);
@@ -352,9 +373,25 @@ export default function MacroSettings() {
         </section>
       )}
 
-      <p className="text-center text-xs text-zinc-400">
-        Saved locally in this browser for now — accounts &amp; sync come next.
-      </p>
+      {!user && (
+        <p className="text-center text-xs text-zinc-400">
+          Browsing as a guest — changes here won&apos;t be saved.{" "}
+          <button
+            type="button"
+            onClick={() => setSignUpPromptOpen(true)}
+            className="underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300"
+          >
+            Create an account
+          </button>{" "}
+          to keep them.
+        </p>
+      )}
+
+      <SignUpPrompt
+        open={signUpPromptOpen}
+        onClose={() => setSignUpPromptOpen(false)}
+        message="Create a free account to save your macro targets and presets so they're here next time you visit."
+      />
     </div>
   );
 }

@@ -10,6 +10,8 @@ import type {
 } from "@/lib/recipe-types";
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
 import { loadSavedRecipes, saveRecipe, updateSavedRecipe } from "@/lib/saved-recipes";
+import { useUser } from "@/lib/supabase/use-user";
+import SignUpPrompt from "./SignUpPrompt";
 
 type Mode = "url" | "manual";
 type NutrientView = "macros" | "micros";
@@ -120,6 +122,8 @@ function unreadyMessage(
 }
 
 export default function RecipeAnalysis() {
+  const { user } = useUser();
+  const [signUpPromptOpen, setSignUpPromptOpen] = useState(false);
   const [mode, setMode] = useState<Mode>("url");
 
   const [url, setUrl] = useState("");
@@ -183,7 +187,16 @@ export default function RecipeAnalysis() {
     const editId = new URLSearchParams(window.location.search).get("edit");
     if (!editId) return;
     (async () => {
-      const recipe = (await loadSavedRecipes()).find((r) => r.id === editId);
+      // A guest can't have saved recipes to begin with, so this link
+      // shouldn't be reachable for one in practice — but loadSavedRecipes()
+      // throws without a session, so guard it rather than leave an
+      // unhandled rejection if it ever is.
+      let recipe;
+      try {
+        recipe = (await loadSavedRecipes()).find((r) => r.id === editId);
+      } catch {
+        return;
+      }
       if (!recipe) return;
       setMode("manual");
       setManualTitle(recipe.title);
@@ -426,6 +439,10 @@ export default function RecipeAnalysis() {
   // rather than the live analyze state.
   async function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
+    if (!user) {
+      setSignUpPromptOpen(true);
+      return;
+    }
     setSaveError(null);
     const patch = {
       title: result.title,
@@ -727,6 +744,11 @@ export default function RecipeAnalysis() {
           )}
         </div>
       )}
+      <SignUpPrompt
+        open={signUpPromptOpen}
+        onClose={() => setSignUpPromptOpen(false)}
+        message="Create a free account to save this recipe to My Recipes and come back to it later."
+      />
     </div>
   );
 }

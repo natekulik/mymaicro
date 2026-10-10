@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, setRememberMe } from "@/lib/supabase/client";
 
 const inputClass =
   "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600";
@@ -14,6 +14,7 @@ export default function LoginForm() {
   const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,6 +24,11 @@ export default function LoginForm() {
     setLoading(true);
 
     try {
+      // Has to happen before createClient() — it reads this preference at
+      // creation time to pick localStorage (persists past closing the
+      // browser) vs sessionStorage (cleared when it closes) as the
+      // session's storage backend.
+      setRememberMe(remember);
       const supabase = createClient();
       const trimmed = identifier.trim();
 
@@ -79,6 +85,16 @@ export default function LoginForm() {
           onChange={(e) => setPassword(e.target.value)}
           className={inputClass}
         />
+      </label>
+
+      <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+        <input
+          type="checkbox"
+          checked={remember}
+          onChange={(e) => setRemember(e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-50"
+        />
+        Remember me
       </label>
 
       {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
