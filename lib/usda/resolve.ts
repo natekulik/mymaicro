@@ -133,7 +133,14 @@ function findUsdaPortionGramsPerUnit(
     const candidates = [p.unitName, p.modifier]
       .filter((v): v is string => Boolean(v))
       .map((v) => v.toLowerCase());
-    return candidates.some((c) => c.replace(/s$/, "") === needle || c.includes(needle));
+    // Whole-word match only — a short needle like "l" (liters) must
+    // match an entire word in the portion label, not just appear as a
+    // substring inside a longer, unrelated word ("package" contains
+    // "g", "frozen" contains "oz" — neither one actually means that
+    // unit). A plain .includes() check here used to accept those.
+    return candidates.some((c) =>
+      c.split(/[^a-z0-9]+/).some((word) => word.replace(/s$/, "") === needle),
+    );
   });
   return hit ? hit.gramWeight : null;
 }
@@ -171,15 +178,27 @@ function gramsForCandidate(
     return { grams: null, needsQuantity: true, suggestedUnit: "oz" };
   }
 
+  // Mass units (g, kg, oz, lb) convert to grams with one fixed factor —
+  // true for every food, no exceptions — so there's never a reason to
+  // consult a USDA-measured portion for one. Checked before the portion
+  // lookup below (rather than only as its fallback) specifically so a
+  // plain "100g" always means 100 grams, full stop, rather than risking
+  // a USDA portion labeled in some other unit that happens to text-match.
+  if (unit?.kind === "mass") {
+    const base = unitToBaseAmount(unit.key, quantity);
+    if (base !== null) return { grams: base, source: "unit_conversion", needsQuantity: false };
+  }
+
   const portionGramsPerUnit = findUsdaPortionGramsPerUnit(fdcId, unitText, portionsByFdc);
   if (portionGramsPerUnit !== null) {
     return { grams: portionGramsPerUnit * quantity, source: "usda_portion", needsQuantity: false };
   }
 
   if (unit && unit.kind !== "count") {
-    // Mass units convert exactly. Volume units fall back to a water-like
-    // density approximation (1 mL ≈ 1 g) when USDA doesn't have a measured
-    // portion for this specific ingredient — flagged via `source`.
+    // Only volume units reach here now (mass was handled above) —
+    // falling back to a water-like density approximation (1 mL ≈ 1 g)
+    // when USDA doesn't have a measured portion for this specific
+    // ingredient, flagged via `source`.
     const base = unitToBaseAmount(unit.key, quantity);
     if (base !== null) return { grams: base, source: "unit_conversion", needsQuantity: false };
   }
