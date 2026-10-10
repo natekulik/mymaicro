@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import type {
   IngredientMacroDetail,
   MicroTotals,
@@ -505,13 +505,7 @@ export default function RecipeAnalysis() {
               className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600"
             />
           </label>
-          <button
-            type="submit"
-            disabled={loading}
-            className="rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
-            {loading ? "Analyzing…" : "Analyze"}
-          </button>
+          <AnalyzeButton loading={loading} />
           <SaveRecipeButton
             disabled={!(macrosReady && microsReady)}
             saved={justSaved}
@@ -565,13 +559,7 @@ export default function RecipeAnalysis() {
             />
           </label>
           <div className="flex items-center gap-3">
-            <button
-              type="submit"
-              disabled={loading}
-              className="rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-            >
-              {loading ? "Analyzing…" : "Analyze"}
-            </button>
+            <AnalyzeButton loading={loading} />
             <SaveRecipeButton
               disabled={!(macrosReady && microsReady)}
               saved={justSaved}
@@ -738,6 +726,68 @@ export default function RecipeAnalysis() {
             </section>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+function AnalyzeButton({ loading }: { loading: boolean }) {
+  return (
+    <button
+      type="submit"
+      disabled={loading}
+      className="relative rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+    >
+      {loading && <LoadingRing />}
+      {loading ? "Analyzing…" : "Analyze"}
+    </button>
+  );
+}
+
+const RING_STROKE_WIDTH = 2;
+
+// A conic-gradient spun with `transform: rotate()` only traces a true
+// circle correctly — on a wide pill, equal angle steps cover very
+// unequal physical distances, so the bright spot visibly cuts across the
+// middle instead of hugging the rounded ends. An SVG stroke animated via
+// `stroke-dashoffset` moves at constant speed along the path's actual
+// arc length instead, so it genuinely hugs the button's real outline —
+// but that means it needs the button's real rendered pixel size (not a
+// CSS trick) to draw a rect with correctly proportioned rounded corners,
+// hence the ResizeObserver rather than a pure-CSS approach.
+function LoadingRing() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setSize({ width: el.offsetWidth, height: el.offsetHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} aria-hidden="true" className="pointer-events-none absolute inset-[3px]">
+      {size && size.width > 0 && size.height > 0 && (
+        <svg width={size.width} height={size.height} className="absolute inset-0">
+          <rect
+            x={RING_STROKE_WIDTH / 2}
+            y={RING_STROKE_WIDTH / 2}
+            width={size.width - RING_STROKE_WIDTH}
+            height={size.height - RING_STROKE_WIDTH}
+            rx={(size.height - RING_STROKE_WIDTH) / 2}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={RING_STROKE_WIDTH}
+            strokeLinecap="round"
+            pathLength={100}
+            strokeDasharray="22 78"
+            className="loading-ring-dash"
+          />
+        </svg>
       )}
     </div>
   );

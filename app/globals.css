@@ -77,3 +77,21 @@ body {
 .animate-week-slide-prev {
   animation: week-slide-in-left 220ms ease-out;
 }
+
+/* A short bright segment that travels around a pill button's outline
+   while it's busy (see LoadingRing in RecipeAnalysis.tsx, which draws
+   the actual rect/rx matching the button's real rendered size). Animates
+   stroke-dashoffset rather than rotating a gradient — pathLength={100}
+   on the <rect> remaps its whole perimeter to 0-100 regardless of the
+   button's real pixel dimensions, so this moves at constant speed and
+   genuinely hugs the rounded ends instead of a conic-gradient's angle
+   sweep, which cuts across a wide oval's middle instead of its edges. */
+@keyframes ring-dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+.loading-ring-dash {
+  animation: ring-dash 1.1s linear infinite;
+}
