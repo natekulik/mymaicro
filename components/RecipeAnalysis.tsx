@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import type {
   IngredientMacroDetail,
   MicroTotals,
@@ -56,13 +56,17 @@ const BAR_VIEW_CONFIG: Record<BarView, { label: string; barColor: string; pillAc
 type Override = Partial<
   Pick<
     IngredientMacroDetail,
+    | "raw"
     | "macros"
     | "micros"
     | "grams"
     | "matchedDescription"
+    | "matchSource"
+    | "matchConfidence"
     | "gramsSource"
     | "needsQuantity"
     | "fdcId"
+    | "variantOptions"
   >
 >;
 
@@ -80,6 +84,41 @@ type ManualEntry = {
   fat: number | null;
   micros: MicroTotals; // sparse — only keys the user actually filled in
 };
+
+// The "Optimize" button — Claude proposes one ingredient swap toward the
+// chosen direction (see app/api/optimize-recipe/route.ts), which the
+// backend then verifies against the real USDA data before this shape
+// ever reaches the frontend. `replacementDetail` is already a fully
+// resolved, database-backed IngredientMacroDetail — applying the
+// suggestion is just overriding one ingredient with it, the same
+// mechanism a variant swap or a quantity resolve already uses.
+type OptimizeDirection = "more_protein" | "less_protein" | "more_carbs" | "less_carbs" | "more_fat" | "less_fat";
+
+const OPTIMIZE_OPTIONS: { value: OptimizeDirection; label: string }[] = [
+  { value: "more_protein", label: "More protein" },
+  { value: "less_protein", label: "Less protein" },
+  { value: "more_carbs", label: "More carbs" },
+  { value: "less_carbs", label: "Less carbs" },
+  { value: "more_fat", label: "More fat" },
+  { value: "less_fat", label: "Less fat" },
+];
+
+type OptimizeSuggestion = {
+  originalIndex: number;
+  originalText: string;
+  replacementText: string;
+  reasoning: string;
+  replacementDetail: IngredientMacroDetail;
+  before: NutritionMacro;
+  after: NutritionMacro;
+};
+
+const ANALYZE_INFO =
+  "Reads the recipe's ingredients and estimates calories, protein, carbs, fat, and micronutrients per serving, matched against the USDA food database.";
+const OPTIMIZE_INFO =
+  "Asks Claude to suggest one ingredient swap toward more or less protein, carbs, or fat — verified against real USDA data before you see it, and nothing changes until you confirm. Needs a free account, capped at 50 uses for now.";
+const SAVE_RECIPE_INFO =
+  "Saves this recipe's ingredients and nutrition breakdown to your account so you can find it again later, from My Recipes. Needs a free account.";
 
 const RECOMPUTE_UNITS = [
   { value: "g", label: "grams" },
@@ -128,6 +167,10 @@ function unreadyMessage(
 export default function RecipeAnalysis() {
   const { user } = useUser();
   const [signUpPromptOpen, setSignUpPromptOpen] = useState(false);
+  // Which action opened the prompt — the modal is one shared instance, so
+  // this is what makes its message describe the thing that actually
+  // needed an account instead of always saying the same one.
+  const [signUpPromptReason, setSignUpPromptReason] = useState<"save" | "optimize">("save");
   const [mode, setMode] = useState<Mode>("url");
 
   const [url, setUrl] = useState("");
@@ -176,6 +219,11 @@ export default function RecipeAnalysis() {
   // in place instead of creating a new one. Cleared by switchMode, since
   // deliberately switching URL/Manual tabs means starting a fresh analysis.
   const [editingRecipeId, setEditingRecipeId] = useState<string | null>(null);
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimizeError, setOptimizeError] = useState<string | null>(null);
+  // The current pending suggestion, shown in a confirm modal — nothing is
+  // applied to the recipe until the user explicitly confirms it.
+  const [optimizeSuggestion, setOptimizeSuggestion] = useState<OptimizeSuggestion | null>(null);
 
   const effectiveServings = servingsInput.trim() ? Number(servingsInput) : null;
   const hasValidServings = effectiveServings !== null && effectiveServings > 0;
@@ -440,6 +488,88 @@ export default function RecipeAnalysis() {
     });
   }
 
+  // Sends the recipe's current effective state (post-match, post-override,
+  // post-manual-entry — whatever's actually driving the totals right now)
+  // to the backend, which asks Claude for one substitution and verifies it
+  // against the real USDA data before it ever comes back here. Nothing
+  // about the recipe changes yet — the result just opens the confirm modal.
+  async function handleOptimize(direction: OptimizeDirection) {
+    if (!hasValidServings || optimizing) return;
+    // Pre-checked client-side so a guest sees the sign-up prompt
+    // immediately rather than waiting on a round trip that would just
+    // reject them anyway — the server re-checks this regardless, since a
+    // client-side check alone is never trustworthy for something gating
+    // real API spend.
+    if (!user) {
+      setSignUpPromptReason("optimize");
+      setSignUpPromptOpen(true);
+      return;
+    }
+    setOptimizing(true);
+    setOptimizeError(null);
+    try {
+      const res = await fetch("/api/optimize-recipe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ingredients: effectiveDetails, servings: effectiveServings, direction }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.code === "sign_in_required") {
+          setSignUpPromptReason("optimize");
+          setSignUpPromptOpen(true);
+          return;
+        }
+        setOptimizeError(data.message ?? "Couldn't generate a suggestion.");
+        return;
+      }
+      setOptimizeSuggestion(data as OptimizeSuggestion);
+    } catch {
+      setOptimizeError("Couldn't reach the optimizer — try again.");
+    } finally {
+      setOptimizing(false);
+    }
+  }
+
+  function applyOptimizeSuggestion() {
+    if (!optimizeSuggestion) return;
+    const { originalIndex, replacementText, replacementDetail } = optimizeSuggestion;
+
+    setResult((prev) => {
+      if (!prev) return prev;
+      const nextIngredients = [...prev.ingredients];
+      nextIngredients[originalIndex] = replacementText;
+      return { ...prev, ingredients: nextIngredients };
+    });
+    setOverrides((prev) => ({
+      ...prev,
+      [originalIndex]: {
+        raw: replacementDetail.raw,
+        macros: replacementDetail.macros,
+        micros: replacementDetail.micros,
+        grams: replacementDetail.grams,
+        matchedDescription: replacementDetail.matchedDescription,
+        matchSource: replacementDetail.matchSource,
+        matchConfidence: replacementDetail.matchConfidence,
+        gramsSource: replacementDetail.gramsSource,
+        needsQuantity: replacementDetail.needsQuantity,
+        fdcId: replacementDetail.fdcId,
+        variantOptions: [],
+      },
+    }));
+    // The swapped-in ingredient is a fresh match — any manual entry or
+    // "which kind?" confirmation tied to whatever used to be at this
+    // index no longer applies to it.
+    clearManualEntry(originalIndex);
+    setConfirmedVariants((prev) => {
+      if (!(originalIndex in prev)) return prev;
+      const next = { ...prev };
+      delete next[originalIndex];
+      return next;
+    });
+    setOptimizeSuggestion(null);
+  }
+
   // Only callable once both macrosReady and microsReady are true (see the
   // disabled prop on the button below), so everything here is always a
   // real value — this snapshots the final, already-confirmed numbers
@@ -447,6 +577,7 @@ export default function RecipeAnalysis() {
   async function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
     if (!user) {
+      setSignUpPromptReason("save");
       setSignUpPromptOpen(true);
       return;
     }
@@ -529,13 +660,27 @@ export default function RecipeAnalysis() {
               className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600"
             />
           </label>
-          <AnalyzeButton loading={loading} />
-          <SaveRecipeButton
-            disabled={!(macrosReady && microsReady)}
-            saved={justSaved}
-            editing={!!editingRecipeId}
-            onClick={handleSaveRecipe}
-          />
+          <div className="flex items-center gap-1.5">
+            <AnalyzeButton loading={loading} />
+            <InfoTooltip text={ANALYZE_INFO} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <OptimizeButton
+              disabled={!(macrosReady && microsReady)}
+              optimizing={optimizing}
+              onSelect={handleOptimize}
+            />
+            <InfoTooltip text={OPTIMIZE_INFO} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <SaveRecipeButton
+              disabled={!(macrosReady && microsReady)}
+              saved={justSaved}
+              editing={!!editingRecipeId}
+              onClick={handleSaveRecipe}
+            />
+            <InfoTooltip text={SAVE_RECIPE_INFO} />
+          </div>
         </form>
       ) : (
         <form
@@ -582,14 +727,28 @@ export default function RecipeAnalysis() {
               className="w-full resize-y rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600"
             />
           </label>
-          <div className="flex items-center gap-3">
-            <AnalyzeButton loading={loading} />
-            <SaveRecipeButton
-              disabled={!(macrosReady && microsReady)}
-              saved={justSaved}
-              editing={!!editingRecipeId}
-              onClick={handleSaveRecipe}
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-1.5">
+              <AnalyzeButton loading={loading} />
+              <InfoTooltip text={ANALYZE_INFO} />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <OptimizeButton
+                disabled={!(macrosReady && microsReady)}
+                optimizing={optimizing}
+                onSelect={handleOptimize}
+              />
+              <InfoTooltip text={OPTIMIZE_INFO} />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <SaveRecipeButton
+                disabled={!(macrosReady && microsReady)}
+                saved={justSaved}
+                editing={!!editingRecipeId}
+                onClick={handleSaveRecipe}
+              />
+              <InfoTooltip text={SAVE_RECIPE_INFO} />
+            </div>
           </div>
         </form>
       )}
@@ -597,6 +756,12 @@ export default function RecipeAnalysis() {
       {saveError && (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
           Couldn&apos;t save that recipe: {saveError}
+        </div>
+      )}
+
+      {optimizeError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">
+          {optimizeError}
         </div>
       )}
 
@@ -755,8 +920,19 @@ export default function RecipeAnalysis() {
       <SignUpPrompt
         open={signUpPromptOpen}
         onClose={() => setSignUpPromptOpen(false)}
-        message="Create a free account to save this recipe to My Recipes and come back to it later."
+        message={
+          signUpPromptReason === "optimize"
+            ? "Create a free account to use Optimize — Claude's AI-suggested ingredient swaps, verified against real USDA data."
+            : "Create a free account to save this recipe to My Recipes and come back to it later."
+        }
       />
+      {optimizeSuggestion && (
+        <OptimizeSuggestionModal
+          suggestion={optimizeSuggestion}
+          onCancel={() => setOptimizeSuggestion(null)}
+          onConfirm={applyOptimizeSuggestion}
+        />
+      )}
     </div>
   );
 }
@@ -771,6 +947,170 @@ function AnalyzeButton({ loading }: { loading: boolean }) {
       {loading && <LoadingRing />}
       {loading ? "Analyzing…" : "Analyze"}
     </button>
+  );
+}
+
+// Closes a popover on a click anywhere outside it — same pattern used
+// elsewhere in the app (My Recipes' group picker, Macro Settings' info
+// tooltip), duplicated locally rather than shared since each of those
+// lives in its own component file with no shared hooks module yet.
+function useCloseOnOutsideClick<T extends HTMLElement>(open: boolean, onClose: () => void) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handlePointerDown(e: globalThis.PointerEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open, onClose]);
+  return ref;
+}
+
+// Same click-to-open, click-outside-to-close info bubble as Macro
+// Settings' "Macro Specific Meals" toggle — one next to each of
+// Analyze/Optimize/Add to My Recipes below, explaining what that
+// specific button does.
+function InfoTooltip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useCloseOnOutsideClick<HTMLDivElement>(open, () => setOpen(false));
+
+  return (
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label="More info"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 text-[10px] font-medium text-zinc-400 transition hover:border-zinc-400 hover:text-zinc-500 dark:border-zinc-600 dark:text-zinc-500 dark:hover:border-zinc-500 dark:hover:text-zinc-400"
+      >
+        i
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-10 mt-2 w-64 rounded-xl border border-zinc-200 bg-white p-3 text-xs leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OptimizeButton({
+  disabled,
+  optimizing,
+  onSelect,
+}: {
+  disabled: boolean;
+  optimizing: boolean;
+  onSelect: (direction: OptimizeDirection) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useCloseOnOutsideClick<HTMLDivElement>(open, () => setOpen(false));
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled || optimizing}
+        onClick={() => setOpen((o) => !o)}
+        className="relative whitespace-nowrap rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+      >
+        {optimizing && <LoadingRing />}
+        {optimizing ? "Optimizing…" : "Optimize"}
+      </button>
+      {open && !optimizing && (
+        <div className="absolute left-0 top-full z-10 mt-2 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+          {OPTIMIZE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onSelect(opt.value);
+              }}
+              className="block w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-700"
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OptimizeSuggestionModal({
+  suggestion,
+  onCancel,
+  onConfirm,
+}: {
+  suggestion: OptimizeSuggestion;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const rows: { label: string; key: keyof NutritionMacro; unit: string }[] = [
+    { label: "Calories", key: "calories", unit: "" },
+    { label: "Protein", key: "protein", unit: "g" },
+    { label: "Carbs", key: "carbs", unit: "g" },
+    { label: "Fat", key: "fat", unit: "g" },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Suggested change</h2>
+        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+          Replace <span className="font-medium">{suggestion.originalText}</span> with{" "}
+          <span className="font-medium">{suggestion.replacementText}</span>.
+        </p>
+        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{suggestion.reasoning}</p>
+
+        <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-1.5 text-xs">
+          <span />
+          <span className="text-center font-medium text-zinc-400">Before</span>
+          <span className="text-center font-medium text-zinc-400">After</span>
+          {rows.map(({ label, key, unit }) => (
+            <Fragment key={key}>
+              <span className="text-zinc-500 dark:text-zinc-400">{label}</span>
+              <span className="text-center text-zinc-700 dark:text-zinc-200">
+                {Math.round(suggestion.before[key] ?? 0)}
+                {unit}
+              </span>
+              <span className="text-center font-medium text-emerald-600 dark:text-emerald-400">
+                {Math.round(suggestion.after[key] ?? 0)}
+                {unit}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+          >
+            Apply swap
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

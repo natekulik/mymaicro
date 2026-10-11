@@ -28,6 +28,7 @@ export default function NavTabs() {
   const router = useRouter();
   const { user } = useUser();
   const [username, setUsername] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const isAuthPage = AUTH_PATHS.includes(pathname);
 
   useEffect(() => {
@@ -39,6 +40,21 @@ export default function NavTabs() {
       const supabase = createClient();
       const { data } = await supabase.from("profiles").select("username").eq("id", user.id).maybeSingle();
       setUsername(data?.username ?? null);
+    })();
+  }, [user]);
+
+  // ADMIN_EMAILS only exists server-side (no NEXT_PUBLIC_ prefix, by
+  // design — see lib/admin.ts), so this is the only way a Client
+  // Component can know whether to show the Admin tab at all.
+  useEffect(() => {
+    (async () => {
+      if (!user) {
+        setIsAdmin(false);
+        return;
+      }
+      const res = await fetch("/api/admin/is-admin");
+      const data = await res.json();
+      setIsAdmin(!!data.isAdmin);
     })();
   }, [user]);
 
@@ -79,6 +95,18 @@ export default function NavTabs() {
                   </Link>
                 );
               })}
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  className={`whitespace-nowrap rounded-full px-1.5 py-1 text-[11px] font-medium transition lg:px-3.5 lg:py-1.5 lg:text-sm ${
+                    pathname === "/admin"
+                      ? "bg-zinc-900 text-white dark:bg-zinc-50 dark:text-zinc-900"
+                      : "text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/40"
+                  }`}
+                >
+                  Admin
+                </Link>
+              )}
             </nav>
           )}
         </div>

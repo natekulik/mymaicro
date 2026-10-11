@@ -137,6 +137,17 @@ create table if not exists public.recipe_group_assignments (
   primary key (user_id, recipe_id, group_id)
 );
 
+-- One row per user, incremented once per "Optimize" attempt (see
+-- app/api/optimize-recipe/route.ts) — a real LLM call happens whether or
+-- not it produces a usable suggestion, so usage counts there, not just on
+-- a successful apply. Enforces the free-tier cap (ADMIN_EMAILS bypasses
+-- it entirely) until real billing exists for this feature.
+create table if not exists public.optimize_usage (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  count integer not null default 0,
+  updated_at timestamptz not null default now()
+);
+
 create or replace function public.enable_rls_for_own_user_id(table_name text)
 returns void
 language plpgsql
@@ -175,6 +186,7 @@ select public.enable_rls_for_own_user_id('macro_presets');
 select public.enable_rls_for_own_user_id('saved_recipes');
 select public.enable_rls_for_own_user_id('recipe_groups');
 select public.enable_rls_for_own_user_id('recipe_group_assignments');
+select public.enable_rls_for_own_user_id('optimize_usage');
 
 -- ============================================================
 -- Auto-create a profiles row (username + phone) whenever someone signs
@@ -268,3 +280,24 @@ grant select, insert, update, delete on table public.macro_presets to authentica
 grant select, insert, update, delete on table public.saved_recipes to authenticated;
 grant select, insert, update, delete on table public.recipe_groups to authenticated;
 grant select, insert, update, delete on table public.recipe_group_assignments to authenticated;
+grant select, insert, update, delete on table public.optimize_usage to authenticated;
+
+-- service_role (the admin dashboard's service-role client, see
+-- lib/supabase/admin.ts) is meant to bypass RLS entirely, but — same
+-- surprise as the authenticated grants above — Supabase only wires that
+-- up automatically for tables created via the dashboard UI, not raw SQL
+-- like this whole file. Without this block, every query from
+-- app/admin/page.tsx fails with "permission denied for table ..." even
+-- though service_role is supposed to see everything.
+grant usage on schema public to service_role;
+grant select on table public.profiles to service_role;
+grant select on table public.macro_profiles to service_role;
+grant select on table public.weekly_plan_templates to service_role;
+grant select on table public.weekly_plan_week_overrides to service_role;
+grant select on table public.history_log to service_role;
+grant select on table public.weekly_presets to service_role;
+grant select on table public.macro_presets to service_role;
+grant select on table public.saved_recipes to service_role;
+grant select on table public.recipe_groups to service_role;
+grant select on table public.recipe_group_assignments to service_role;
+grant select on table public.optimize_usage to service_role;
