@@ -8,8 +8,15 @@ import type { IngredientMacroDetail, NutritionMacro } from "@/lib/recipe-types";
 
 export const runtime = "nodejs";
 // Headroom for the tool-use loop below — the model may call search_foods a
-// few times before proposing a swap, each a real network round trip.
-export const maxDuration = 60;
+// few times before proposing a swap, each a real network round trip. Set
+// to Vercel's own Hobby-plan ceiling (not some smaller number we picked)
+// since there's no reason to cap this any tighter than the platform
+// already does — a 60s cap here was actually *more* restrictive than
+// Vercel's own 300s default and could cut the request off mid-flight
+// under real production latency, which a killed function surfaces to the
+// frontend as a non-JSON response (an HTML timeout page), not a clean
+// error — i.e. exactly the generic "couldn't reach the optimizer" catch.
+export const maxDuration = 300;
 
 // Free-tier cap while there's no real billing for this feature yet —
 // every signed-in account gets this many lifetime attempts, tracked in
@@ -102,7 +109,13 @@ function sumPerServing(details: IngredientMacroDetail[], servings: number): Nutr
   };
 }
 
-export async function POST(request: Request) {
+// Wrapped by POST below in a top-level try/catch — without it, anything
+// unexpected throwing in here (an Anthropic SDK error, a D1 hiccup, a
+// Supabase blip) could leave Next.js to produce a non-JSON error
+// response, which the frontend's fetch then fails to parse and reports
+// as a generic "couldn't reach the optimizer" — exactly the unhelpful
+// dead end this is meant to avoid.
+async function handlePost(request: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return errorResponse("not_configured", "Recipe optimization isn't configured on this server yet.", 503);
@@ -296,4 +309,17 @@ export async function POST(request: Request) {
     before,
     after,
   });
+}
+
+export async function POST(request: Request) {
+  try {
+    return await handlePost(request);
+  } catch (err) {
+    console.error("optimize-recipe failed:", err);
+    return errorResponse(
+      "unexpected_error",
+      "Something went wrong generating a suggestion — try again.",
+      500,
+    );
+  }
 }
