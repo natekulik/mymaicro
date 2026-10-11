@@ -178,13 +178,14 @@ export default function AdminMfaSetup() {
 
       {status === "enrolling" && qrCode && (
         <form onSubmit={handleVerify} className="flex flex-col gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element -- this is
-              a data: URI built from the enrollment response, not a static
-              asset next/image can optimize. */}
-          <img
-            src={`data:image/svg+xml;utf-8,${encodeURIComponent(qrCode)}`}
-            alt="Scan with your authenticator app"
-            className="h-40 w-40 self-start rounded-lg border border-zinc-200 dark:border-zinc-700"
+          {/* qr_code is raw SVG markup from Supabase's own enroll()
+              response (trusted, not user input) — rendered directly
+              rather than wrapped in a data: URI, which failed to parse
+              as an image in testing (showed as a broken-image icon). */}
+          <div
+            aria-label="Scan with your authenticator app"
+            className="h-40 w-40 self-start overflow-hidden rounded-lg border border-zinc-200 bg-white p-2 dark:border-zinc-700 [&>svg]:h-full [&>svg]:w-full"
+            dangerouslySetInnerHTML={{ __html: qrCode }}
           />
           {secret && (
             <p className="text-xs text-zinc-400">
