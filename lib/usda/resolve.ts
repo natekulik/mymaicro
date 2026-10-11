@@ -278,10 +278,50 @@ function headTierOf(description: string, headWord: string | null): 0 | 1 | 2 | 3
   if (categoryWords.length === 1 && categoryWords[0] === headWord) return 3;
   for (const segment of segments.slice(1)) {
     const segmentWords = segment.split(/\s+/).filter(Boolean).map(normalizeWord);
-    if (segmentWords.length === 1 && segmentWords[0] === headWord) return 2;
+    // A segment *ending* in the head word counts, not just one that's the
+    // head word alone — USDA phrases most cuts as "<modifiers> <noun>"
+    // within a single segment ("chuck eye steak" for head word "steak"),
+    // and requiring the segment to be nothing but the head word missed
+    // every one of those, scoring real matches as if they were no match
+    // at all.
+    if (segmentWords.length > 0 && segmentWords[segmentWords.length - 1] === headWord) return 2;
   }
   if (categoryWords.includes(headWord)) return 1;
   return 0;
+}
+
+// How many of the search's words show up together inside ONE segment of
+// the candidate's description, at best. Rewards "Beef, chuck eye steak,
+// ..." for a "chuck steak" search — both words share the one "chuck eye
+// steak" segment (score 2) — over a description where the same two
+// words only ever appear in two unrelated segments (best single-segment
+// score: 1), e.g. a branded product labeled "..., STEAKS, BACON WRAPPED
+// CHUCK, ...".
+function bestSegmentWordMatchCount(description: string, words: string[]): number {
+  const segments = segmentsOf(description);
+  let best = 0;
+  for (const segment of segments) {
+    const segmentWords = new Set(segment.split(/\s+/).filter(Boolean).map(normalizeWord));
+    const count = words.filter((w) => segmentWords.has(w)).length;
+    if (count > best) best = count;
+  }
+  return best;
+}
+
+// How many of the search's words each exactly equal some whole segment
+// on their own. Rewards "Oil, olive, salad or cooking" for an "olive
+// oil" search — "oil" and "olive" are each their own clean segment
+// (score 2) — over "Oil, corn, peanut, and olive", where "olive" is
+// only ever part of a longer "and olive" segment, never standing alone
+// (score 1). This is the inverse case from bestSegmentWordMatchCount
+// above: that one rewards words sharing a segment, this one rewards
+// words each getting a segment to themselves — USDA's descriptions use
+// both patterns for what should count as a strong match, so
+// rankCandidates below takes whichever of the two actually fits a given
+// candidate's phrasing.
+function exactSegmentMatchCount(description: string, words: string[]): number {
+  const segments = segmentsOf(description);
+  return words.filter((w) => segments.some((seg) => normalizeWord(seg) === w)).length;
 }
 
 function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCandidate[] {
@@ -292,11 +332,11 @@ function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCa
   return candidates
     .map((c, i) => {
       const headTier = headTierOf(c.match.description, headWord);
-      const segments = segmentsOf(c.match.description);
-      const exactSegmentMatches = words.filter((w) =>
-        segments.some((seg) => normalizeWord(seg) === w),
-      ).length;
-      return { c, i, headTier, exactSegmentMatches };
+      const segmentMatches = Math.max(
+        bestSegmentWordMatchCount(c.match.description, words),
+        exactSegmentMatchCount(c.match.description, words),
+      );
+      return { c, i, headTier, segmentMatches };
     })
     .sort(
       (a, b) =>
@@ -305,7 +345,7 @@ function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCa
         // fallback — so it has to win any tie below headTier/segment
         // matches, or a "simpler description" tiebreak could otherwise
         // reach past a good foundation match into a worse sr_legacy one.
-        b.headTier - a.headTier || b.exactSegmentMatches - a.exactSegmentMatches || a.i - b.i,
+        b.headTier - a.headTier || b.segmentMatches - a.segmentMatches || a.i - b.i,
     )
     .map((s) => s.c);
 }
