@@ -145,6 +145,37 @@ const PREP_STOPWORDS = new Set([
   "or",
 ]);
 
+// Common misspellings of everyday ingredients, fixed in the search text
+// only (the line shown back to the user is untouched). Without this, a
+// typo like "avacado" quietly matches whichever branded product happens
+// to carry the same typo in its name.
+const COMMON_MISSPELLINGS: Record<string, string> = {
+  avacado: "avocado", avacados: "avocados", avocodo: "avocado", advocado: "avocado", guacamolee: "guacamole",
+  tomatoe: "tomato", tomatos: "tomatoes", potatos: "potatoes", potatoe: "potato", brocoli: "broccoli",
+  broccolli: "broccoli", brocolli: "broccoli", zuchini: "zucchini", zucchinni: "zucchini",
+  zuchinni: "zucchini", cauliflour: "cauliflower", califlower: "cauliflower", cucmber: "cucumber",
+  cucumbr: "cucumber", spinich: "spinach", spinache: "spinach", letuce: "lettuce", lettice: "lettuce",
+  celary: "celery", cellery: "celery", carrott: "carrot", carots: "carrots", onoin: "onion", onian: "onion",
+  garlick: "garlic", garic: "garlic", peper: "pepper", pepers: "peppers", jalepeno: "jalapeno",
+  mushroon: "mushroom", mushrom: "mushroom", banannas: "bananas", bananna: "banana", banan: "banana",
+  strawbery: "strawberry", strawberrys: "strawberries", blueberrys: "blueberries", bluberry: "blueberry",
+  rasberry: "raspberry", raspberrys: "raspberries", cantalope: "cantaloupe", pinapple: "pineapple",
+  pineaple: "pineapple", watermelone: "watermelon", cherrys: "cherries", chiken: "chicken",
+  chickn: "chicken", checken: "chicken", turkee: "turkey", salmom: "salmon", samon: "salmon", tunna: "tuna",
+  shrimps: "shrimp", parmesean: "parmesan", parmasan: "parmesan", parmigiano: "parmesan",
+  mozerella: "mozzarella", mozzerella: "mozzarella", mozarella: "mozzarella", cheddor: "cheddar",
+  chedder: "cheddar", yoghurt: "yogurt", yogurth: "yogurt", youghurt: "yogurt", mayonaise: "mayonnaise",
+  mayonnaice: "mayonnaise", mayonase: "mayonnaise", ketsup: "ketchup", catsup: "ketchup",
+  cinammon: "cinnamon", cinnamen: "cinnamon", tumeric: "turmeric", oregeno: "oregano", parsely: "parsley",
+  basel: "basil", rosemarry: "rosemary", vanila: "vanilla", vanillia: "vanilla", chocolat: "chocolate",
+  choclate: "chocolate", flouer: "flour", suger: "sugar", shugar: "sugar", brownsugar: "brown sugar",
+  buter: "butter", butterr: "butter", olve: "olive", oilve: "olive", viniger: "vinegar", vinager: "vinegar",
+  quinua: "quinoa", qinoa: "quinoa", oatmeel: "oatmeal", cereale: "cereal", spagetti: "spaghetti",
+  spagheti: "spaghetti", maccaroni: "macaroni", lentel: "lentil", lentels: "lentils", garbonzo: "garbanzo",
+  almod: "almond", peanutbutter: "peanut butter", walnutt: "walnut", pecon: "pecan", brocolini: "broccolini",
+  egss: "eggs", milke: "milk", mlik: "milk", chese: "cheese", chees: "cheese",
+};
+
 export function parseIngredientLine(rawLine: string): ParsedIngredient {
   let text = rawLine.trim();
 
@@ -207,6 +238,7 @@ export function parseIngredientLine(rawLine: string): ParsedIngredient {
   const searchName = beforeParen
     .split(/\s+/)
     .filter((word) => word && !PREP_STOPWORDS.has(word.toLowerCase()))
+    .map((word) => COMMON_MISSPELLINGS[word.toLowerCase()] ?? word)
     .join(" ")
     .trim();
 
