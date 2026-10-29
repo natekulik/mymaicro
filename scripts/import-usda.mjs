@@ -180,7 +180,10 @@ async function main() {
           unitNameById.get(row.measure_unit_id) ?? null,
           row.portion_description || null,
           row.modifier || null,
-          Number(row.gram_weight),
+          // USDA's gram_weight is for `amount` units ("2 tbsp = 32 g",
+          // "4 oz = 113 g"), not for one — store the per-one-unit weight
+          // so lib/usda/resolve.ts can multiply by the recipe's quantity.
+          Number(row.gram_weight) / (Number(row.amount) > 0 ? Number(row.amount) : 1),
         );
       }
     });

@@ -8,6 +8,14 @@ export type ParsedIngredient = {
   unitText: string | null;
   name: string; // full remainder text, for display
   searchName: string; // trimmed core noun phrase, for matching
+  // The line said "cooked" (stripped from searchName like other prep
+  // words) — lets the matcher pick a cooked entry for foods where raw and
+  // cooked differ a lot ("1 cup cooked rice").
+  isCooked: boolean;
+  // An explicit "small" / "medium" / "large" in the line (also stripped
+  // from searchName) — used to pick the matching USDA portion for a bare
+  // count ("2 large eggs").
+  sizeHint: "small" | "medium" | "large" | null;
 };
 
 const UNICODE_FRACTIONS: Record<string, number> = {
@@ -28,6 +36,8 @@ const UNICODE_FRACTIONS: Record<string, number> = {
 const UNICODE_FRACTION_CHARS = Object.keys(UNICODE_FRACTIONS).join("");
 
 const KNOWN_UNITS = [
+  "sticks",
+  "stick",
   "cups",
   "cup",
   "tablespoons",
@@ -122,6 +132,8 @@ const PREP_STOPWORDS = new Set([
   "uncooked",
   "raw",
   "fresh",
+  "organic",
+  "ripe",
   "large",
   "medium",
   "small",
@@ -198,5 +210,9 @@ export function parseIngredientLine(rawLine: string): ParsedIngredient {
     .join(" ")
     .trim();
 
-  return { raw: rawLine, quantity, unitText, name, searchName: searchName || name };
+  const isCooked = /(?<!un)\bcooked\b/i.test(name);
+  const sizeMatch = name.match(/\b(small|medium|large)\b/i);
+  const sizeHint = sizeMatch ? (sizeMatch[1].toLowerCase() as "small" | "medium" | "large") : null;
+
+  return { raw: rawLine, quantity, unitText, name, searchName: searchName || name, isCooked, sizeHint };
 }

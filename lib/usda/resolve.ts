@@ -2,6 +2,7 @@ import { d1Query } from "./d1";
 import { findFoodCandidates, type FoodCandidate, type FoodMatch } from "./match";
 import { normalizeUnit, unitToBaseAmount } from "./units";
 import { parseIngredientLine } from "./parse-ingredient";
+import { lookupStaple } from "./staples";
 import { MICRO_NUTRIENTS, type MicroTotals } from "./micro-nutrients";
 import type { IngredientMacroDetail, NutritionMacro, VariantOption } from "../recipe-types";
 
@@ -125,11 +126,12 @@ function findUsdaPortionGramsPerUnit(
   fdcId: number,
   unitText: string | null,
   portionsByFdc: PortionsByFdc,
+  descriptorText?: string,
 ): number | null {
   if (!unitText) return null;
   const needle = unitText.toLowerCase().replace(/s$/, "");
   const portions = portionsByFdc.get(fdcId) ?? [];
-  const hit = portions.find((p) => {
+  const matchesUnit = (p: PortionRow) => {
     const candidates = [p.unitName, p.modifier]
       .filter((v): v is string => Boolean(v))
       .map((v) => v.toLowerCase());
@@ -141,7 +143,28 @@ function findUsdaPortionGramsPerUnit(
     return candidates.some((c) =>
       c.split(/[^a-z0-9]+/).some((word) => word.replace(/s$/, "") === needle),
     );
-  });
+  };
+  const unitHits = portions.filter(matchesUnit);
+  // USDA often lists the same unit several ways ("cup, diced" / "cup,
+  // melted" / "cup, shredded") — when the recipe line says how the food
+  // is prepared ("1 cup shredded cheddar"), take the portion that says
+  // the same, instead of whichever happens to be listed first.
+  const descriptors = new Set(
+    (descriptorText ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(normalizeWord),
+  );
+  // With no matching descriptor, prefer the plain unit ("cup") over a
+  // qualified one ("cup, whipped"), which is a different state of the food.
+  const hit =
+    unitHits.find((p) =>
+      (p.modifier ?? "")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .some((w) => descriptors.has(normalizeWord(w)) && normalizeWord(w) !== needle),
+    ) ??
+    unitHits.find((p) => normalizeWord((p.modifier ?? "").trim().toLowerCase()) === needle) ??
+    // A cup of cream is the liquid, not the whipped foam (half the weight).
+    unitHits.find((p) => !/\b(whipped|melted|sifted|pureed)\b/i.test((p.modifier ?? "").split("(")[0])) ??
+    unitHits[0];
   return hit ? hit.gramWeight : null;
 }
 
@@ -150,9 +173,52 @@ function findUsdaPortionGramsPerUnit(
 // food is usually its typical single-item weight (e.g. "1 large" for an
 // egg), so it's a reasonable default when there's nothing more specific to
 // match against.
-function findDefaultPortionGrams(fdcId: number, portionsByFdc: PortionsByFdc): number | null {
+// Portions measured by volume or weight, or labeled as a nutrition-label serving, not
+// a count of the food itself — fine when the recipe asks for them by name
+// ("1 cup avocado"), wrong as the default for a bare count ("1 avocado").
+const NON_COUNT_PORTION_PATTERN =
+  /^\s*(cups?|tbsp|tsp|tablespoons?|teaspoons?|fl\.? ?oz|pints?|quarts?|gallons?|liters?|ml|oz|ounces?|g|grams?|lbs?|pounds?|kg|nlea|serving|quantity not specified)\b/i;
+
+// The portion to use for a bare count with no unit ("1 avocado", "2
+// eggs"). USDA lists a food's portions in no meaningful order — for
+// avocado the first one is "cup, pureed" (about two avocados' worth) — so
+// instead of taking the first, skip volume/serving-size portions, then
+// prefer one that names the food itself ("avocado, NS as to Florida or
+// California"). Falls back to the first portion if nothing better exists.
+function findDefaultPortionGrams(
+  fdcId: number,
+  portionsByFdc: PortionsByFdc,
+  searchName?: string,
+  sizeHint?: "small" | "medium" | "large" | null,
+): number | null {
   const portions = portionsByFdc.get(fdcId) ?? [];
-  return portions.length > 0 ? portions[0].gramWeight : null;
+  if (portions.length === 0) return null;
+  const countLike = portions.filter((p) => !NON_COUNT_PORTION_PATTERN.test(p.modifier ?? ""));
+  const pool = countLike.length > 0 ? countLike : portions;
+  const foodWords = searchName ? searchWordsOf(searchName) : [];
+  const tokens = (p: PortionRow) => (p.modifier ?? "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  // Only the portion's leading word counts ("avocado, NS as to ..." or
+  // "steak") — not any mention of the food further in, which would pick
+  // "wedge or slice (1/8 of one 2-1/8" dia lemon)" as the default
+  // "1 lemon".
+  const isNamed = (p: PortionRow) => {
+    const first = tokens(p)[0];
+    return first !== undefined && foodWords.includes(normalizeWord(first));
+  };
+  // The recipe's own size word wins ("2 large eggs"); otherwise medium —
+  // the size USDA and nutrition labels treat as the typical one. Eggs are
+  // the exception: recipes mean large unless they say otherwise.
+  const size = sizeHint ?? (foodWords.includes("egg") ? "large" : "medium");
+  const isSize = (p: PortionRow) => {
+    const t = tokens(p);
+    return t.includes(size) && !(size === "large" && t[0] === "extra");
+  };
+  const best =
+    pool.find((p) => isNamed(p) && isSize(p)) ??
+    pool.find(isSize) ??
+    pool.find(isNamed) ??
+    pool[0];
+  return best.gramWeight;
 }
 
 type GramsOutcome =
@@ -165,6 +231,9 @@ function gramsForCandidate(
   quantity: number,
   hasExplicitQuantity: boolean,
   portionsByFdc: PortionsByFdc,
+  searchName?: string,
+  sizeHint?: "small" | "medium" | "large" | null,
+  descriptorText?: string,
 ): GramsOutcome {
   const unit = normalizeUnit(unitText);
 
@@ -189,7 +258,7 @@ function gramsForCandidate(
     if (base !== null) return { grams: base, source: "unit_conversion", needsQuantity: false };
   }
 
-  const portionGramsPerUnit = findUsdaPortionGramsPerUnit(fdcId, unitText, portionsByFdc);
+  const portionGramsPerUnit = findUsdaPortionGramsPerUnit(fdcId, unitText, portionsByFdc, descriptorText);
   if (portionGramsPerUnit !== null) {
     return { grams: portionGramsPerUnit * quantity, source: "usda_portion", needsQuantity: false };
   }
@@ -212,7 +281,7 @@ function gramsForCandidate(
     }
     // No unit word, but a count was given ("2 eggs") — the food name
     // itself is the unit. Fall back to USDA's default portion for it.
-    const defaultGrams = findDefaultPortionGrams(fdcId, portionsByFdc);
+    const defaultGrams = findDefaultPortionGrams(fdcId, portionsByFdc, searchName, sizeHint);
     if (defaultGrams !== null) {
       return { grams: defaultGrams * quantity, source: "usda_portion", needsQuantity: false };
     }
@@ -245,7 +314,11 @@ function gramsForCandidate(
 // "onion" against USDA's "Onions" or "olive" against "olives" without
 // pulling in a real inflection library for what's a minor edge case.
 function normalizeWord(word: string): string {
-  return word.toLowerCase().replace(/s$/, "");
+  const w = word.toLowerCase();
+  if (w.length > 4 && w.endsWith("ies")) return `${w.slice(0, -3)}y`; // berries -> berry
+  if (/(oes|ches|shes|xes|sses)$/.test(w)) return w.slice(0, -2); // tomatoes -> tomato
+  if (w.endsWith("ss")) return w; // "grass", "cress" — not plurals
+  return w.replace(/s$/, "");
 }
 
 function searchWordsOf(searchName: string): string[] {
@@ -324,6 +397,51 @@ function exactSegmentMatchCount(description: string, words: string[]): number {
   return words.filter((w) => segments.some((seg) => normalizeWord(seg) === w)).length;
 }
 
+// Words that flag a processed, derived, or alternative-form product (or a
+// diet variant) when they appear in a candidate's description but NOT in
+// the ingredient the user actually wrote. A bare "tomato" or "oats" should
+// land on the plain food, not "Soup, tomato" or "Oil, oat" — USDA's
+// description order and the text search alone don't separate them.
+// Compared after normalizeWord, and skipped for any word the search itself
+// contains, so "egg white", "dried cranberries" or "rice flour" still
+// match what they ask for.
+const DERIVED_FORM_WORDS = new Set(
+  [
+    "white", "yolk", "dried", "dehydrated", "powder", "powdered", "flour",
+    "juice", "soup", "sauce", "babyfood", "bread", "cake", "pie", "pasteurized", "mix",
+    "puree", "paste", "pickled", "syrup", "concentrate", "oil", "candied", "imitation",
+    "substitute", "microwaved", "restaurant", "fast", "pudding", "cookie", "cracker", "chip",
+    "dressing", "spread", "beverage", "drink", "extract", "seasoning", "formula", "infant",
+    "ghee", "clarified", "nonfat", "defatted", "skim", "lowfat", "reduced", "light", "lite",
+    "overripe", "unripe", "stew", "casserole", "entree", "dinner", "meal", "pizza", "sandwich",
+    "burrito", "taco", "salad", "pancake", "waffle", "muffin", "bar", "granola", "cereal",
+    "smoothie", "shake", "flavored", "sweetened", "unsweetened", "breaded", "fried",
+    "smoked", "cured", "jerky", "chowder", "bisque", "gravy", "stuffing", "filling", "topping",
+    "dip", "hummus", "salsa", "ketchup", "relish", "jam", "jelly", "preserves", "marmalade",
+  ].map((w) => w.replace(/s$/, "")),
+);
+
+// 1 point for the plain raw form, minus 1 per derived-form word.
+function plainnessScore(description: string, queryWords: string[]): number {
+  const query = new Set(queryWords);
+  const words = description
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .map(normalizeWord);
+  let score = words.includes("raw") ? 1 : 0;
+  const seen = new Set<string>();
+  for (const w of words) {
+    if (DERIVED_FORM_WORDS.has(w) && !query.has(w) && !seen.has(w)) {
+      seen.add(w);
+      score -= 1;
+    }
+  }
+  return score;
+}
+
+const ALL_VARIETIES_PATTERN = /\ball (commercial )?(varieties|types|classes)\b/i;
+
 function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCandidate[] {
   const words = searchWordsOf(searchName);
   const headWord = headWordOf(searchName);
@@ -336,7 +454,14 @@ function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCa
         bestSegmentWordMatchCount(c.match.description, words),
         exactSegmentMatchCount(c.match.description, words),
       );
-      return { c, i, headTier, segmentMatches };
+      // USDA's catch-all entry for a food that comes in several varieties
+      // ("Avocados, raw, all commercial varieties") is its representative
+      // average — preferred over any single variety ("California",
+      // "Florida") when nothing else distinguishes them. Only compared
+      // within one source, so it never overrides foundation > sr_legacy.
+      const isAllVarieties = ALL_VARIETIES_PATTERN.test(c.match.description) ? 1 : 0;
+      const plainness = plainnessScore(c.match.description, words);
+      return { c, i, headTier, segmentMatches, plainness, isAllVarieties };
     })
     .sort(
       (a, b) =>
@@ -345,7 +470,11 @@ function rankCandidates(candidates: FoodCandidate[], searchName: string): FoodCa
         // fallback — so it has to win any tie below headTier/segment
         // matches, or a "simpler description" tiebreak could otherwise
         // reach past a good foundation match into a worse sr_legacy one.
-        b.headTier - a.headTier || b.segmentMatches - a.segmentMatches || a.i - b.i,
+        b.headTier - a.headTier ||
+        b.segmentMatches - a.segmentMatches ||
+        b.plainness - a.plainness ||
+        (a.c.match.source === b.c.match.source ? b.isAllVarieties - a.isAllVarieties : 0) ||
+        a.i - b.i,
     )
     .map((s) => s.c);
 }
@@ -465,10 +594,11 @@ export async function resolveIngredientMacros(rawLine: string): Promise<Ingredie
   const parsed = parseIngredientLine(rawLine);
   const rawCandidates = await findFoodCandidates(parsed.searchName);
   const rankedCandidates = rankCandidates(rawCandidates, parsed.searchName);
+  const staple = lookupStaple(searchWordsOf(parsed.searchName).join(" "), parsed.isCooked);
   const quantity = parsed.quantity ?? 1;
   const hasExplicitQuantity = parsed.quantity !== null;
 
-  const fdcIds = [...new Set(rankedCandidates.map((c) => c.match.fdcId))];
+  const fdcIds = [...new Set([...rankedCandidates.map((c) => c.match.fdcId), ...(staple ? [staple.fdcId] : [])])];
   const [nutrientsByFdc, portionsByFdc] = await Promise.all([
     getNutrientRowsBulk(fdcIds),
     getPortionsBulk(fdcIds),
@@ -490,6 +620,34 @@ export async function resolveIngredientMacros(rawLine: string): Promise<Ingredie
     ];
   }
 
+  // If the best-ranked match is a generic USDA entry (foundation /
+  // sr_legacy) that turns out unusable below — no nutrient panel, or no
+  // portion for "1 avocado" — move the other equally-good generic entries
+  // ahead of any branded product before falling through. Otherwise a
+  // generic with no portion data (USDA's "Avocado, Hass, peeled, raw")
+  // loses to whichever branded product happens to carry a serving size,
+  // like a guacamole or a 30 g "serving" of avocado.
+  const headWord = headWordOf(parsed.searchName);
+  const topCandidate = candidates[0];
+  if (topCandidate && topCandidate.match.source !== "branded") {
+    const topTier = headTierOf(topCandidate.match.description, headWord);
+    const strongGeneric = (c: FoodCandidate) =>
+      c.match.source !== "branded" && headTierOf(c.match.description, headWord) === topTier;
+    candidates = [...candidates.filter(strongGeneric), ...candidates.filter((c) => !strongGeneric(c))];
+  }
+
+  // Everyday ingredients with a known-best USDA entry (see staples.ts) go
+  // absolutely first — ahead of the family and generic-first reordering
+  // above, which would otherwise pull e.g. nonfat cheddar in front of
+  // plain. If the staple is unusable for this line, resolution falls
+  // through to the rest in the order computed above.
+  if (staple) {
+    candidates = [
+      { match: staple, confidence: "high" },
+      ...candidates.filter((c) => c.match.fdcId !== staple.fdcId),
+    ];
+  }
+
   let bestUnusable:
     | { match: FoodMatch; confidence: "high" | "low"; needsQuantity: boolean; suggestedUnit: string }
     | null = null;
@@ -504,6 +662,9 @@ export async function resolveIngredientMacros(rawLine: string): Promise<Ingredie
       quantity,
       hasExplicitQuantity,
       portionsByFdc,
+      parsed.searchName,
+      parsed.sizeHint,
+      parsed.name,
     );
     if (outcome.grams === null) {
       // A real ingredient match, but no way to responsibly convert its

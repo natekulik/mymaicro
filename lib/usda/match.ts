@@ -100,8 +100,14 @@ function wordVariants(word: string): string[] {
   }
   if (word.endsWith("s") && word.length > 1) {
     variants.add(word.slice(0, -1));
+    // "tomatoes" -> "tomato", "peaches" -> "peach", "radishes" -> "radish"
+    if (/(oes|ches|shes|xes|sses)$/.test(word)) variants.add(word.slice(0, -2));
   } else {
     variants.add(`${word}s`);
+    // "tomato" -> "tomatoes", "peach" -> "peaches" — adding just an "s"
+    // misses these entirely, and USDA uses the "-es" plural for them
+    // ("Tomatoes, red, ripe, raw", "Potatoes, russet...").
+    if (/(o|ch|sh|x|z)$/.test(word)) variants.add(`${word}es`);
   }
   return [...variants];
 }
