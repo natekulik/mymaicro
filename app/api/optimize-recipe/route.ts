@@ -62,7 +62,7 @@ const PROPOSE_TOOL: Anthropic.Tool = {
       replacement_text: {
         type: "string",
         description:
-          "The full replacement ingredient line, written the way a recipe would (quantity, unit, name) — e.g. '1 cup plain Greek yogurt'. Keep the same quantity/unit as the original unless the substitution genuinely needs a different amount.",
+          "The full replacement ingredient line, written the way a recipe would (quantity, unit, name) — e.g. '1 cup plain Greek yogurt' or '1 lb 90% lean ground beef'. Put every distinguishing detail (fat percentage, 'nonfat', 'skinless', etc.) BEFORE the food name and use no commas — anything after a comma is treated as a prep note and ignored when looking the food up. Keep the same quantity/unit as the original unless the substitution genuinely needs a different amount.",
       },
       reasoning: {
         type: "string",
@@ -273,7 +273,11 @@ async function handlePost(request: Request) {
   // Never trust the model's own nutrition math — the proposed replacement
   // text goes through the exact same USDA matching pipeline every other
   // ingredient in the app does.
-  const resolved = await resolveIngredientMacros(proposal.replacement_text);
+  // Commas are flattened to spaces first: the matcher reads everything
+  // after a comma as a prep note ("onion, chopped") and drops it, which
+  // would silently discard the very detail that makes this a swap
+  // ("ground beef, 90% lean" -> plain ground beef -> the original 70/30).
+  const resolved = await resolveIngredientMacros(proposal.replacement_text.replace(/,/g, " "));
   if (!resolved.macros) {
     return errorResponse(
       "unverified",

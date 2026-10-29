@@ -61,6 +61,7 @@ const VEGETABLE_OIL = staple(172370, "Oil, vegetable, soybean, refined");
 const ALMONDS = staple(170567, "Nuts, almonds");
 const MAYONNAISE = staple(171009, "Salad dressing, mayonnaise, regular");
 const WHITE_BREAD = staple(325871, "Bread, white, commercially prepared", "foundation");
+const GROUND_BEEF = staple(174036, "Beef, ground, 80% lean meat / 20% fat, raw");
 const MOZZARELLA = staple(170845, "Cheese, mozzarella, whole milk");
 const PARMESAN = staple(170848, "Cheese, parmesan, hard");
 const APPLE = staple(171688, "Apples, raw, with skin (Includes foods for USDA's Food Distribution Program)");
@@ -125,6 +126,7 @@ const STAPLES: Record<string, Staple> = {
   mayo: MAYONNAISE,
   bread: WHITE_BREAD,
   "white bread": WHITE_BREAD,
+  "ground beef": GROUND_BEEF,
   zucchini: ZUCCHINI,
   "bell pepper": GREEN_PEPPER,
   "green bell pepper": GREEN_PEPPER,
