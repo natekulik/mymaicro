@@ -42,6 +42,7 @@ import ProgressRow from "./ProgressRow";
 import HistoricalPlan from "./HistoricalPlan";
 import AccountRequiredPage from "./AccountRequiredPage";
 import { ScaleSavedRecipeModal } from "./ScaleToMacrosModal";
+import RecipeDetailsModal from "./RecipeDetailsModal";
 import { useUser } from "@/lib/supabase/use-user";
 
 // Snapshot for the one-level "paste to all days" undo — tagged with the
@@ -517,6 +518,8 @@ function DayDetail({
   onScaleMeal: (meal: PlannedMeal) => void;
 }) {
   const [newSubsection, setNewSubsection] = useState("");
+  // The recipe open in the "Show ingredients" pop-up.
+  const [detailsRecipe, setDetailsRecipe] = useState<SavedRecipe | null>(null);
   // Which subsection's macro-alignment breakdown is expanded — clicking a
   // subsection's name toggles it; only one open at a time, same accordion
   // pattern as the day strip above.
@@ -706,34 +709,41 @@ function DayDetail({
                       return (
                         <li
                           key={meal.id}
-                          className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                          className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
                         >
-                          <span className="truncate">
-                            {recipe ? recipe.title : "Recipe no longer available"}
+                          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                            <span className="truncate">{recipe ? recipe.title : "Recipe no longer available"}</span>
                             {recipe && recipe.nutrition.calories != null && (
-                              <span className="ml-1.5 text-zinc-400">
+                              <span className="whitespace-nowrap text-zinc-400">
                                 {Math.round(recipe.nutrition.calories)} cals
                               </span>
                             )}
-                          </span>
-                          <div className="flex shrink-0 items-center gap-2">
                             {recipe && (
-                              <button
-                                type="button"
-                                onClick={() => onScaleMeal(meal)}
-                                className="whitespace-nowrap rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                              >
-                                Scale to my plan
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => setDetailsRecipe(recipe)}
+                                  className="whitespace-nowrap rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                                >
+                                  Show ingredients
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onScaleMeal(meal)}
+                                  className="whitespace-nowrap rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                                >
+                                  Scale to my plan
+                                </button>
+                              </>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => onRemoveMeal(meal.id)}
-                              className="text-zinc-400 transition hover:text-rose-500"
-                            >
-                              ×
-                            </button>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveMeal(meal.id)}
+                            className="shrink-0 text-zinc-400 transition hover:text-rose-500"
+                          >
+                            ×
+                          </button>
                         </li>
                       );
                     })}
@@ -761,6 +771,7 @@ function DayDetail({
           + Add meal
         </button>
       </form>
+      {detailsRecipe && <RecipeDetailsModal recipe={detailsRecipe} onClose={() => setDetailsRecipe(null)} />}
     </section>
   );
 }

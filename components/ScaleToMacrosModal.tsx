@@ -128,6 +128,7 @@ function ScaleToMacrosDialog({
   fixedDay,
   initialMeal,
   excludeMealId,
+  baseline,
   note,
   onClose,
   onApply,
@@ -142,6 +143,10 @@ function ScaleToMacrosDialog({
   // The planned meal entry being scaled — left out of "what's already
   // planned", since it's the very thing being resized.
   excludeMealId?: string;
+  // The recipe's own current per-serving numbers, when they're not just the
+  // sum of its ingredients (a saved recipe) — shown as "Now" so it matches
+  // what the plan shows.
+  baseline?: Macro & { calories: number };
   // Small print under the buttons (what Apply will actually do).
   note?: string;
   onClose: () => void;
@@ -189,7 +194,11 @@ function ScaleToMacrosDialog({
     };
   })();
 
-  const current = useMemo(() => recipePerServing(ingredients, servings), [ingredients, servings]);
+  const current = useMemo(
+    () => baseline ?? recipePerServing(ingredients, servings),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ingredients, servings, baseline?.calories, baseline?.protein, baseline?.carbs, baseline?.fat],
+  );
   const gap: Macro = {
     protein: remaining.protein - current.protein,
     carbs: remaining.carbs - current.carbs,
@@ -202,9 +211,9 @@ function ScaleToMacrosDialog({
     ingredientIndex: Number(picked[m]),
   }));
   const preview = useMemo(
-    () => previewScale(ingredients, servings, gap, picks),
+    () => previewScale(ingredients, servings, gap, picks, baseline),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ingredients, servings, remaining.protein, remaining.carbs, remaining.fat, picked],
+    [ingredients, servings, remaining.protein, remaining.carbs, remaining.fat, picked, baseline],
   );
 
   const goalNote = !chosenMeal
@@ -470,7 +479,10 @@ export function ScaleSavedRecipeModal({
     if (!loaded || saving) return;
     setSaving(true);
     try {
-      const { ingredients, nutrition, micros } = applyScaleToDetails(loaded.details, changes, recipe.servings);
+      const { ingredients, nutrition, micros } = applyScaleToDetails(loaded.details, changes, recipe.servings, {
+        nutrition: recipe.nutrition,
+        micros: recipe.micros,
+      });
       const scaled = await updateSavedRecipe(recipe.id, {
         title: recipe.title,
         sourceUrl: recipe.sourceUrl,
@@ -511,6 +523,12 @@ export function ScaleSavedRecipeModal({
       fixedDay={dayName}
       initialMeal={subsection}
       excludeMealId={mealId}
+      baseline={{
+        calories: recipe.nutrition.calories ?? 0,
+        protein: recipe.nutrition.protein ?? 0,
+        carbs: recipe.nutrition.carbs ?? 0,
+        fat: recipe.nutrition.fat ?? 0,
+      }}
       note="Apply updates this recipe in My Recipes with the new amounts — it changes everywhere the recipe is planned."
       onClose={onClose}
       onApply={(changes) => void handleApply(changes)}

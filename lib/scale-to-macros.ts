@@ -232,8 +232,12 @@ export function previewScale(
   servings: number,
   gap: Macro,
   picks: ScalePick[],
+  // Where the recipe's numbers start from, when that isn't simply the sum of
+  // its ingredients (a saved recipe keeps its own totals) — the changes are
+  // added on top of this rather than recomputing the whole recipe.
+  baseline?: Macro & { calories: number },
 ): ScalePreview {
-  const current = recipePerServing(details, servings);
+  const current = baseline ?? recipePerServing(details, servings);
   const usable = picks.filter((p) => isScalable(details[p.ingredientIndex]));
   const unscalable = picks.filter((p) => !isScalable(details[p.ingredientIndex])).map((p) => p.ingredientIndex);
 
@@ -269,12 +273,18 @@ export function previewScale(
 }
 
 // The recipe as it stands once `changes` are applied: its ingredient lines,
-// and per-serving nutrition / micros recomputed from the scaled ingredients.
-// Used to save a scaled copy of a recipe.
+// and per-serving nutrition / micros. Used to update a saved recipe.
+//
+// With a `baseline` (the saved recipe's own current numbers), only what the
+// scaling adds or removes is applied on top of it — so numbers the recipe
+// already had (published by its source, or typed in by hand) aren't
+// replaced by a fresh recalculation that might come out a little different.
+// Without one, everything is recomputed from the ingredients.
 export function applyScaleToDetails(
   details: IngredientMacroDetail[],
   changes: ScaleChange[],
   servings: number,
+  baseline?: { nutrition: NutritionMacro; micros: MicroTotals },
 ): { ingredients: string[]; nutrition: NutritionMacro; micros: MicroTotals } {
   const byIndex = new Map(changes.map((c) => [c.index, c]));
   const total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
@@ -282,7 +292,9 @@ export function applyScaleToDetails(
 
   const ingredients = details.map((d, i) => {
     const change = byIndex.get(i);
-    const factor = change?.factor ?? 1;
+    // With a baseline, count only the change (factor - 1); otherwise the
+    // ingredient's whole scaled contribution.
+    const factor = baseline ? (change ? change.factor - 1 : 0) : (change?.factor ?? 1);
     total.calories += (d.macros?.calories ?? 0) * factor;
     total.protein += (d.macros?.protein ?? 0) * factor;
     total.carbs += (d.macros?.carbs ?? 0) * factor;
@@ -294,14 +306,24 @@ export function applyScaleToDetails(
   });
 
   for (const key of Object.keys(micros)) micros[key] /= servings;
+  const delta = {
+    calories: total.calories / servings,
+    protein: total.protein / servings,
+    carbs: total.carbs / servings,
+    fat: total.fat / servings,
+  };
+  if (!baseline) return { ingredients, nutrition: delta, micros };
+
+  const mergedMicros: MicroTotals = { ...baseline.micros };
+  for (const [key, value] of Object.entries(micros)) mergedMicros[key] = (mergedMicros[key] ?? 0) + value;
   return {
     ingredients,
     nutrition: {
-      calories: total.calories / servings,
-      protein: total.protein / servings,
-      carbs: total.carbs / servings,
-      fat: total.fat / servings,
+      calories: (baseline.nutrition.calories ?? 0) + delta.calories,
+      protein: (baseline.nutrition.protein ?? 0) + delta.protein,
+      carbs: (baseline.nutrition.carbs ?? 0) + delta.carbs,
+      fat: (baseline.nutrition.fat ?? 0) + delta.fat,
     },
-    micros,
+    micros: mergedMicros,
   };
 }
