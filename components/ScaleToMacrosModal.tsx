@@ -107,7 +107,7 @@ function Backdrop({ onClose, children }: { onClose: () => void; children: React.
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Scale to my macros"
+        aria-label="Scale to my plan"
         onClick={(e) => e.stopPropagation()}
         className="flex max-h-[90vh] w-full max-w-lg flex-col gap-4 overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
       >
@@ -201,7 +201,7 @@ function ScaleToMacrosDialog({
   return (
     <Backdrop onClose={onClose}>
       <div>
-        <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Scale to my macros</h2>
+        <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Scale to my plan</h2>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
           Pick the ingredients to scale, and one serving of this recipe is resized to fill what&apos;s left of your
           plan.

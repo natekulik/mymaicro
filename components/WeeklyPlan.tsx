@@ -30,6 +30,7 @@ import { loadMacroPresets, type MacroPreset } from "@/lib/macro-presets";
 import { DEFAULT_MACRO_COLORS, defaultProfile, type Macro, type MacroColors, type MealSlot } from "@/lib/macro";
 import {
   dateForDayIndexInWeek,
+  dayNameForDate,
   formatShortDate,
   formatWeekRangeLabel,
   mondayOfDate,
@@ -124,6 +125,8 @@ export default function WeeklyPlan() {
       const todayStr = todayDateString();
       setToday(todayStr);
       setWeekStart(mondayOfDate(todayStr));
+      // Land with today's plan already open.
+      setOpenDay(dayNameForDate(todayStr));
     })();
   }, [userLoading, user]);
 
@@ -154,8 +157,11 @@ export default function WeeklyPlan() {
 
   function changeWeek(delta: number) {
     setSlideDirection(delta > 0 ? "next" : "prev");
-    setWeekStart((prev) => (prev ? shiftWeek(prev, delta) : prev));
-    setOpenDay(null);
+    const nextWeek = shiftWeek(weekStart!, delta);
+    setWeekStart(nextWeek);
+    // Coming back to the current week reopens today; any other week starts
+    // with every day collapsed.
+    setOpenDay(nextWeek === mondayOfDate(today!) ? dayNameForDate(today!) : null);
     setPasteArmedDay(null);
   }
 
@@ -167,7 +173,7 @@ export default function WeeklyPlan() {
     const target = mondayOfDate(today!);
     setSlideDirection(target > weekStart! ? "next" : target < weekStart! ? "prev" : null);
     setWeekStart(target);
-    setOpenDay(null);
+    setOpenDay(dayNameForDate(today!));
     setPasteArmedDay(null);
   }
 

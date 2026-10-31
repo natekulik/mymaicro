@@ -1,4 +1,4 @@
-// "Scale to my macros": given what's still unfilled in the day (or a meal),
+// "Scale to my plan": given what's still unfilled in the day (or a meal),
 // work out how much more of the ingredients the user picked are needed to
 // fill it. Pure math + text helpers — no storage, no React.
 //

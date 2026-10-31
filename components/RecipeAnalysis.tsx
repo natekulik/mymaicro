@@ -243,7 +243,7 @@ export default function RecipeAnalysis() {
   // The current pending suggestion, shown in a confirm modal — nothing is
   // applied to the recipe until the user explicitly confirms it.
   const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null);
-  // The "Scale to my macros" pop-up.
+  // The "Scale to my plan" pop-up.
   const [scaleOpen, setScaleOpen] = useState(false);
 
   const effectiveServings = servingsInput.trim() ? Number(servingsInput) : null;
@@ -1047,7 +1047,7 @@ export default function RecipeAnalysis() {
           signUpPromptReason === "optimize"
             ? "Create a free account to use Optimize — Claude's AI-suggested ingredient swaps, verified against real USDA data."
             : signUpPromptReason === "scale"
-              ? "Create a free account to scale this recipe to your macro goals — it uses your saved goals and weekly plan."
+              ? "Create a free account to scale this recipe to your plan — it uses your saved goals and weekly plan."
               : "Create a free account to save this recipe to My Recipes and come back to it later."
         }
       />
@@ -1359,7 +1359,7 @@ function ScaleButton({ disabled, onClick }: { disabled: boolean; onClick: () => 
       title={disabled ? "Finish the macro and micro breakdown above to scale this recipe" : undefined}
       className="whitespace-nowrap rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
     >
-      Scale to my macros
+      Scale to my plan
     </button>
   );
 }
