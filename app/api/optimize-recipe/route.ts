@@ -26,6 +26,10 @@ export const maxDuration = 300;
 // non-admin usage.
 const FREE_OPTIMIZE_LIMIT = 50;
 
+// Each Optimize click asks for this many ideas in one request — cheaper
+// than separate requests, since the recipe and tool setup are only sent once.
+const MAX_SUGGESTIONS = 2;
+
 const DIRECTIONS = {
   more_protein: "more protein",
   less_protein: "less protein",
@@ -51,7 +55,8 @@ const SEARCH_TOOL: Anthropic.Tool = {
 
 const PROPOSE_TOOL: Anthropic.Tool = {
   name: "propose_swap",
-  description: "Finalize your single proposed ingredient substitution for this recipe. Call this exactly once, when you've settled on your answer.",
+  description:
+    "Record one of your two proposed ingredient substitutions for this recipe. Call this once per idea — twice in total — when you've settled on your answers. Prefer one swap on each of two different ingredient lines; use two options for the same line only when no second ingredient is worth changing.",
   input_schema: {
     type: "object",
     properties: {
@@ -178,18 +183,36 @@ async function handlePost(request: Request) {
 
   const anthropic = new Anthropic({ apiKey });
 
+  // Each line carries that ingredient's own per-serving contribution, so the
+  // model can see which ingredients actually move the numbers (rather than
+  // guessing) when deciding which ones are worth changing.
   const ingredientList = ingredients
-    .map((d, i) => `${i}. ${d.raw}${d.matchedDescription ? ` (currently matched: ${d.matchedDescription})` : ""}`)
+    .map((d, i) => {
+      const matched = d.matchedDescription ? ` (currently matched: ${d.matchedDescription})` : "";
+      const m = d.macros;
+      const share = m
+        ? ` — adds ${Math.round((m.calories ?? 0) / servings)} cal, ${Math.round((m.protein ?? 0) / servings)}g protein, ` +
+          `${Math.round((m.carbs ?? 0) / servings)}g carbs, ${Math.round((m.fat ?? 0) / servings)}g fat per serving`
+        : "";
+      return `${i}. ${d.raw}${matched}${share}`;
+    })
     .join("\n");
 
   const systemPrompt =
-    "You are a recipe nutrition assistant. Given a recipe's ingredient list (0-indexed) and its current " +
-    "per-serving macros, propose exactly ONE ingredient substitution that meaningfully moves the recipe " +
-    "toward the requested direction while staying true to the dish — a similar role, texture, and flavor " +
-    "category (e.g. swap one dairy for another, one protein source for another), never a random unrelated " +
-    "ingredient. Use the search_foods tool as needed to confirm your intended replacement is a real, " +
-    "specific, recognizable ingredient before proposing it. When you've decided, call propose_swap exactly " +
-    "once with your answer.";
+    "You are a recipe nutrition assistant. Given a recipe's ingredient list (0-indexed, each line showing what " +
+    "that ingredient adds per serving) and its current per-serving macros, give the cook exactly TWO ideas that " +
+    "move the recipe toward the requested direction while staying true to the dish — a similar role, texture, " +
+    "and flavor category (e.g. swap one dairy for another, one protein source for another), never a random " +
+    "unrelated ingredient.\n\n" +
+    "How to choose the two ideas: first look for two DIFFERENT ingredient lines where a swap would make a " +
+    "meaningful difference to the requested macro — roughly a 10% shift in the recipe's per-serving amount of " +
+    "it, or a clearly noticeable absolute amount. If you find two, give ONE swap for each of them (the cook " +
+    "can apply both). Only if a single ingredient line is the only one worth changing, give two different " +
+    "replacement options for that same line instead (the cook picks one). Never give two options for one " +
+    "ingredient when a second ingredient could also make a meaningful difference.\n\n" +
+    "Use the search_foods tool as needed to confirm each intended replacement is a real, specific, " +
+    "recognizable ingredient before proposing it. When you've decided, call propose_swap once per idea — " +
+    "twice in total.";
 
   const userMessage =
     `Recipe ingredients (whole recipe, ${servings} serving${servings === 1 ? "" : "s"}):\n${ingredientList}\n\n` +
@@ -199,15 +222,15 @@ async function handlePost(request: Request) {
 
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
 
-  let proposal: ProposedSwap | null = null;
+  const proposals: ProposedSwap[] = [];
 
-  // Capped at 5 round trips — a couple of searches plus the final
-  // propose_swap call is the normal case; this is just a backstop against
-  // the model never converging.
-  for (let turn = 0; turn < 5 && !proposal; turn++) {
+  // Capped at 6 round trips — a few searches plus the two propose_swap
+  // calls is the normal case (the model can also make both in one turn);
+  // this is just a backstop against the model never converging.
+  for (let turn = 0; turn < 6 && proposals.length < MAX_SUGGESTIONS; turn++) {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-5",
-      max_tokens: 1024,
+      max_tokens: 1536,
       system: systemPrompt,
       tools: [SEARCH_TOOL, PROPOSE_TOOL],
       messages,
@@ -223,7 +246,7 @@ async function handlePost(request: Request) {
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const toolUse of toolUses) {
       if (toolUse.name === "propose_swap") {
-        proposal = toolUse.input as ProposedSwap;
+        if (proposals.length < MAX_SUGGESTIONS) proposals.push(toolUse.input as ProposedSwap);
         toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: "Recorded." });
         continue;
       }
@@ -257,7 +280,7 @@ async function handlePost(request: Request) {
       .upsert({ user_id: user.id, count: (usageRow?.count ?? 0) + 1, updated_at: new Date().toISOString() });
   }
 
-  if (!proposal) {
+  if (proposals.length === 0) {
     return errorResponse(
       "no_suggestion",
       "Couldn't come up with a suggestion for that recipe — try a different direction.",
@@ -265,54 +288,94 @@ async function handlePost(request: Request) {
     );
   }
 
-  const index = proposal.original_index;
-  if (!Number.isInteger(index) || index < 0 || index >= ingredients.length) {
-    return errorResponse("bad_index", "The suggestion didn't line up with this recipe — try again.", 422);
-  }
+  // The same swap proposed twice counts once.
+  const unique = proposals.filter(
+    (p, i) =>
+      proposals.findIndex(
+        (q) =>
+          q.original_index === p.original_index &&
+          q.replacement_text.trim().toLowerCase() === p.replacement_text.trim().toLowerCase(),
+      ) === i,
+  );
 
-  // Never trust the model's own nutrition math — the proposed replacement
-  // text goes through the exact same USDA matching pipeline every other
-  // ingredient in the app does.
+  // Never trust the model's own nutrition math — every proposed
+  // replacement goes through the exact same USDA matching pipeline every
+  // other ingredient in the app does. A suggestion that can't be verified
+  // is dropped; only if none survive does the request fail.
   // Commas are flattened to spaces first: the matcher reads everything
   // after a comma as a prep note ("onion, chopped") and drops it, which
   // would silently discard the very detail that makes this a swap
   // ("ground beef, 90% lean" -> plain ground beef -> the original 70/30).
-  const resolved = await resolveIngredientMacros(proposal.replacement_text.replace(/,/g, " "));
-  if (!resolved.macros) {
-    return errorResponse(
-      "unverified",
-      `Couldn't verify nutrition data for "${proposal.replacement_text}" — try again, or a different direction.`,
-      422,
+  const verified = await Promise.all(
+    unique.map(async (proposal) => {
+      const index = proposal.original_index;
+      if (!Number.isInteger(index) || index < 0 || index >= ingredients.length) {
+        return { error: errorResponse("bad_index", "The suggestion didn't line up with this recipe — try again.", 422) };
+      }
+      const resolved = await resolveIngredientMacros(proposal.replacement_text.replace(/,/g, " "));
+      if (!resolved.macros) {
+        return {
+          error: errorResponse(
+            "unverified",
+            `Couldn't verify nutrition data for "${proposal.replacement_text}" — try again, or a different direction.`,
+            422,
+          ),
+        };
+      }
+
+      const replacementDetail: IngredientMacroDetail = {
+        raw: proposal.replacement_text,
+        fdcId: resolved.matched?.fdcId ?? null,
+        matchedDescription: resolved.matched?.description ?? null,
+        matchSource: resolved.matched?.source ?? null,
+        matchConfidence: resolved.matchConfidence,
+        grams: resolved.grams,
+        gramsSource: resolved.gramsSource,
+        macros: resolved.macros,
+        micros: resolved.micros,
+        needsQuantity: resolved.needsQuantity,
+        suggestedUnit: resolved.suggestedUnit,
+        variantOptions: resolved.variantOptions,
+      };
+      const after = sumPerServing(
+        ingredients.map((d, i) => (i === index ? replacementDetail : d)),
+        servings,
+      );
+      return {
+        suggestion: {
+          originalIndex: index,
+          originalText: ingredients[index].raw,
+          replacementText: proposal.replacement_text,
+          reasoning: proposal.reasoning,
+          replacementDetail,
+          before,
+          after,
+        },
+      };
+    }),
+  );
+
+  const suggestions = verified.flatMap((v) => ("suggestion" in v && v.suggestion ? [v.suggestion] : []));
+  if (suggestions.length === 0) {
+    const firstError = verified.find((v) => "error" in v && v.error);
+    return (
+      (firstError && "error" in firstError ? firstError.error : null) ??
+      errorResponse("no_suggestion", "Couldn't come up with a suggestion for that recipe — try a different direction.", 422)
     );
   }
 
-  const replacementDetail: IngredientMacroDetail = {
-    raw: proposal.replacement_text,
-    fdcId: resolved.matched?.fdcId ?? null,
-    matchedDescription: resolved.matched?.description ?? null,
-    matchSource: resolved.matched?.source ?? null,
-    matchConfidence: resolved.matchConfidence,
-    grams: resolved.grams,
-    gramsSource: resolved.gramsSource,
-    macros: resolved.macros,
-    micros: resolved.micros,
-    needsQuantity: resolved.needsQuantity,
-    suggestedUnit: resolved.suggestedUnit,
-    variantOptions: resolved.variantOptions,
-  };
+  // If the two swaps touch different ingredients, the cook can apply both
+  // — so also report what the recipe looks like with both in place.
+  let combinedAfter: NutritionMacro | null = null;
+  if (suggestions.length === 2 && suggestions[0].originalIndex !== suggestions[1].originalIndex) {
+    const both = ingredients.map((d, i) => {
+      const hit = suggestions.find((s) => s.originalIndex === i);
+      return hit ? hit.replacementDetail : d;
+    });
+    combinedAfter = sumPerServing(both, servings);
+  }
 
-  const afterIngredients = ingredients.map((d, i) => (i === index ? replacementDetail : d));
-  const after = sumPerServing(afterIngredients, servings);
-
-  return NextResponse.json({
-    originalIndex: index,
-    originalText: ingredients[index].raw,
-    replacementText: proposal.replacement_text,
-    reasoning: proposal.reasoning,
-    replacementDetail,
-    before,
-    after,
-  });
+  return NextResponse.json({ suggestions, before, combinedAfter });
 }
 
 export async function POST(request: Request) {

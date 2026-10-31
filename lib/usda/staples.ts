@@ -51,6 +51,7 @@ const PEANUT_BUTTER = staple(174266, "Peanut butter, smooth style, with salt (In
 const GREEK_YOGURT = staple(170894, "Yogurt, Greek, plain, nonfat (Includes foods for USDA's Food Distribution Program)");
 const CHOCOLATE_CHIPS = staple(167976, "Candies, semisweet chocolate");
 const CREAM_CHEESE = staple(173418, "Cheese, cream");
+const HALF_AND_HALF = staple(171255, "Cream, fluid, half and half");
 const WHOLE_WHEAT_BREAD = staple(172688, "Bread, whole-wheat, commercially prepared");
 const OLIVE_OIL = staple(171413, "Oil, olive, salad or cooking");
 const QUINOA = staple(168874, "Quinoa, uncooked");
@@ -112,6 +113,9 @@ const STAPLES: Record<string, Staple> = {
   "chocolate chip": CHOCOLATE_CHIPS,
   "semisweet chocolate chip": CHOCOLATE_CHIPS,
   "cream cheese": CREAM_CHEESE,
+  // "and" is dropped from search phrases, so "half and half" arrives as "half half".
+  "half half": HALF_AND_HALF,
+  "half & half": HALF_AND_HALF,
   "whole wheat bread": WHOLE_WHEAT_BREAD,
   "olive oil": OLIVE_OIL,
   "extra virgin olive oil": OLIVE_OIL,

@@ -115,10 +115,19 @@ type OptimizeSuggestion = {
   after: NutritionMacro;
 };
 
+// One Optimize click returns up to two ideas — swaps for two different
+// ingredients (can be applied together; `combinedAfter` is the recipe with
+// both) or two alternatives for the same ingredient (pick one).
+type OptimizeResult = {
+  suggestions: OptimizeSuggestion[];
+  before: NutritionMacro;
+  combinedAfter: NutritionMacro | null;
+};
+
 const ANALYZE_INFO =
   "Reads the recipe's ingredients and estimates calories, protein, carbs, fat, and micronutrients per serving, matched against the USDA food database.";
 const OPTIMIZE_INFO =
-  "Asks Claude to suggest one ingredient swap toward more or less protein, carbs, or fat — verified against real USDA data before you see it, and nothing changes until you confirm. Needs a free account, capped at 50 uses for now.";
+  "Asks Claude for two ideas toward more or less protein, carbs, or fat — swaps for two different ingredients (apply either or both) or two options for the same one — verified against real USDA data before you see them. Nothing changes until you confirm. Needs a free account, capped at 50 uses for now.";
 const SAVE_RECIPE_INFO =
   "Saves this recipe's ingredients and nutrition breakdown to your account so you can find it again later, from My Recipes. Needs a free account.";
 
@@ -229,7 +238,7 @@ export default function RecipeAnalysis() {
   const [optimizeError, setOptimizeError] = useState<string | null>(null);
   // The current pending suggestion, shown in a confirm modal — nothing is
   // applied to the recipe until the user explicitly confirms it.
-  const [optimizeSuggestion, setOptimizeSuggestion] = useState<OptimizeSuggestion | null>(null);
+  const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null);
 
   const effectiveServings = servingsInput.trim() ? Number(servingsInput) : null;
   const hasValidServings = effectiveServings !== null && effectiveServings > 0;
@@ -496,7 +505,7 @@ export default function RecipeAnalysis() {
 
   // Sends the recipe's current effective state (post-match, post-override,
   // post-manual-entry — whatever's actually driving the totals right now)
-  // to the backend, which asks Claude for one substitution and verifies it
+  // to the backend, which asks Claude for two ideas and verifies them
   // against the real USDA data before it ever comes back here. Nothing
   // about the recipe changes yet — the result just opens the confirm modal.
   async function handleOptimize(direction: OptimizeDirection) {
@@ -529,7 +538,7 @@ export default function RecipeAnalysis() {
         setOptimizeError(data.message ?? "Couldn't generate a suggestion.");
         return;
       }
-      setOptimizeSuggestion(data as OptimizeSuggestion);
+      setOptimizeResult(data as OptimizeResult);
     } catch {
       setOptimizeError("Couldn't reach the optimizer — try again.");
     } finally {
@@ -537,43 +546,51 @@ export default function RecipeAnalysis() {
     }
   }
 
-  function applyOptimizeSuggestion() {
-    if (!optimizeSuggestion) return;
-    const { originalIndex, replacementText, replacementDetail } = optimizeSuggestion;
+  // Applies one or both of the suggested swaps in a single update.
+  function applyOptimizeSwaps(swaps: OptimizeSuggestion[]) {
+    if (swaps.length === 0) return;
 
     setResult((prev) => {
       if (!prev) return prev;
       const nextIngredients = [...prev.ingredients];
-      nextIngredients[originalIndex] = replacementText;
+      for (const { originalIndex, replacementText } of swaps) nextIngredients[originalIndex] = replacementText;
       return { ...prev, ingredients: nextIngredients };
     });
-    setOverrides((prev) => ({
-      ...prev,
-      [originalIndex]: {
-        raw: replacementDetail.raw,
-        macros: replacementDetail.macros,
-        micros: replacementDetail.micros,
-        grams: replacementDetail.grams,
-        matchedDescription: replacementDetail.matchedDescription,
-        matchSource: replacementDetail.matchSource,
-        matchConfidence: replacementDetail.matchConfidence,
-        gramsSource: replacementDetail.gramsSource,
-        needsQuantity: replacementDetail.needsQuantity,
-        fdcId: replacementDetail.fdcId,
-        variantOptions: [],
-      },
-    }));
-    // The swapped-in ingredient is a fresh match — any manual entry or
-    // "which kind?" confirmation tied to whatever used to be at this
-    // index no longer applies to it.
-    clearManualEntry(originalIndex);
-    setConfirmedVariants((prev) => {
-      if (!(originalIndex in prev)) return prev;
+    setOverrides((prev) => {
       const next = { ...prev };
-      delete next[originalIndex];
+      for (const { originalIndex, replacementDetail } of swaps) {
+        next[originalIndex] = {
+          raw: replacementDetail.raw,
+          macros: replacementDetail.macros,
+          micros: replacementDetail.micros,
+          grams: replacementDetail.grams,
+          matchedDescription: replacementDetail.matchedDescription,
+          matchSource: replacementDetail.matchSource,
+          matchConfidence: replacementDetail.matchConfidence,
+          gramsSource: replacementDetail.gramsSource,
+          needsQuantity: replacementDetail.needsQuantity,
+          fdcId: replacementDetail.fdcId,
+          variantOptions: [],
+        };
+      }
       return next;
     });
-    setOptimizeSuggestion(null);
+    // A swapped-in ingredient is a fresh match — any manual entry or
+    // "which kind?" confirmation tied to whatever used to be at its index
+    // no longer applies to it.
+    for (const { originalIndex } of swaps) clearManualEntry(originalIndex);
+    setConfirmedVariants((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const { originalIndex } of swaps) {
+        if (originalIndex in next) {
+          delete next[originalIndex];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setOptimizeResult(null);
   }
 
   // Only callable once both macrosReady and microsReady are true (see the
@@ -958,11 +975,11 @@ export default function RecipeAnalysis() {
             : "Create a free account to save this recipe to My Recipes and come back to it later."
         }
       />
-      {optimizeSuggestion && (
+      {optimizeResult && (
         <OptimizeSuggestionModal
-          suggestion={optimizeSuggestion}
-          onCancel={() => setOptimizeSuggestion(null)}
-          onConfirm={applyOptimizeSuggestion}
+          result={optimizeResult}
+          onCancel={() => setOptimizeResult(null)}
+          onApply={applyOptimizeSwaps}
         />
       )}
     </div>
@@ -1072,21 +1089,47 @@ function OptimizeButton({
   );
 }
 
+const OPTIMIZE_ROWS: { label: string; key: keyof NutritionMacro; unit: string }[] = [
+  { label: "Calories", key: "calories", unit: "" },
+  { label: "Protein", key: "protein", unit: "g" },
+  { label: "Carbs", key: "carbs", unit: "g" },
+  { label: "Fat", key: "fat", unit: "g" },
+];
+
+function BeforeAfterTable({ before, after }: { before: NutritionMacro; after: NutritionMacro }) {
+  return (
+    <div className="grid grid-cols-4 gap-1.5">
+      {OPTIMIZE_ROWS.map(({ label, key, unit }) => (
+        <div key={key} className="rounded-lg bg-zinc-50 px-1 py-1.5 text-center dark:bg-zinc-800">
+          <div className="text-[10px] font-medium text-zinc-400">{label}</div>
+          <div className="text-xs tabular-nums text-zinc-500 dark:text-zinc-400">
+            {Math.round(before[key] ?? 0)}
+            {unit}
+          </div>
+          <div className="text-xs font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+            → {Math.round(after[key] ?? 0)}
+            {unit}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function OptimizeSuggestionModal({
-  suggestion,
+  result,
   onCancel,
-  onConfirm,
+  onApply,
 }: {
-  suggestion: OptimizeSuggestion;
+  result: OptimizeResult;
   onCancel: () => void;
-  onConfirm: () => void;
+  onApply: (swaps: OptimizeSuggestion[]) => void;
 }) {
-  const rows: { label: string; key: keyof NutritionMacro; unit: string }[] = [
-    { label: "Calories", key: "calories", unit: "" },
-    { label: "Protein", key: "protein", unit: "g" },
-    { label: "Carbs", key: "carbs", unit: "g" },
-    { label: "Fat", key: "fat", unit: "g" },
-  ];
+  const { suggestions, before, combinedAfter } = result;
+  const several = suggestions.length > 1;
+  // Two swaps on different ingredients can go in together; two on the same
+  // ingredient are alternatives, so only one can.
+  const canApplyBoth = several && combinedAfter !== null;
 
   return (
     <div
@@ -1097,48 +1140,76 @@ function OptimizeSuggestionModal({
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+        className="flex max-h-[90vh] w-full max-w-md flex-col gap-4 overflow-y-auto rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
       >
-        <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Suggested change</h2>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-          Replace <span className="font-medium">{suggestion.originalText}</span> with{" "}
-          <span className="font-medium">{suggestion.replacementText}</span>.
-        </p>
-        <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{suggestion.reasoning}</p>
-
-        <div className="mt-4 grid grid-cols-3 gap-x-2 gap-y-1.5 text-xs">
-          <span />
-          <span className="text-center font-medium text-zinc-400">Before</span>
-          <span className="text-center font-medium text-zinc-400">After</span>
-          {rows.map(({ label, key, unit }) => (
-            <Fragment key={key}>
-              <span className="text-zinc-500 dark:text-zinc-400">{label}</span>
-              <span className="text-center text-zinc-700 dark:text-zinc-200">
-                {Math.round(suggestion.before[key] ?? 0)}
-                {unit}
-              </span>
-              <span className="text-center font-medium text-emerald-600 dark:text-emerald-400">
-                {Math.round(suggestion.after[key] ?? 0)}
-                {unit}
-              </span>
-            </Fragment>
-          ))}
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            {!several ? "Suggested change" : canApplyBoth ? "Two ideas" : "Two options"}
+          </h2>
+          {several && (
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              {canApplyBoth
+                ? "These change different ingredients — apply either one, or both together."
+                : `Two different replacements for ${suggestions[0].originalText} — pick one.`}
+            </p>
+          )}
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        {suggestions.map((suggestion, i) => (
+          <div
+            key={`${suggestion.originalIndex}-${suggestion.replacementText}`}
+            className="flex flex-col gap-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700"
+          >
+            <div>
+              {several && (
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                  {canApplyBoth ? `Idea ${i + 1}` : `Option ${i + 1}`}
+                </span>
+              )}
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                Replace <span className="font-medium">{suggestion.originalText}</span> with{" "}
+                <span className="font-medium">{suggestion.replacementText}</span>.
+              </p>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{suggestion.reasoning}</p>
+            </div>
+            <BeforeAfterTable before={suggestion.before} after={suggestion.after} />
+            <button
+              type="button"
+              onClick={() => onApply([suggestion])}
+              className={`self-end rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                several
+                  ? "border border-zinc-300 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  : "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+              }`}
+            >
+              {several ? "Apply this one" : "Apply swap"}
+            </button>
+          </div>
+        ))}
+
+        {canApplyBoth && combinedAfter && (
+          <div className="flex flex-col gap-2 rounded-xl border border-zinc-300 p-3 dark:border-zinc-600">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+              Both together
+            </span>
+            <BeforeAfterTable before={before} after={combinedAfter} />
+            <button
+              type="button"
+              onClick={() => onApply(suggestions)}
+              className="self-end rounded-full bg-zinc-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              Apply both
+            </button>
+          </div>
+        )}
+
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={onCancel}
             className="rounded-full border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
-            Apply swap
           </button>
         </div>
       </div>
