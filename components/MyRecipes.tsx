@@ -9,9 +9,11 @@ import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
 import {
   addRecipeGroup,
   addRecipeToGroup,
+  deleteRecipeGroup,
   loadRecipeGroupAssignments,
   loadRecipeGroups,
   removeRecipeFromGroup,
+  renameRecipeGroup,
   saveRecipeGroupAssignments,
   type RecipeGroup,
   type RecipeGroupAssignments,
@@ -45,6 +47,7 @@ export default function MyRecipes() {
   // Which groups are ticked in the group filter dropdown — empty shows
   // every recipe; otherwise a recipe shows if it's in any ticked group.
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+  const [manageGroupsOpen, setManageGroupsOpen] = useState(false);
 
   // This whole page is about saved data — a guest has none, so there's
   // nothing useful to load. The account-required early return below
@@ -89,6 +92,28 @@ export default function MyRecipes() {
   async function handleAddGroup(name: string) {
     const group = await addRecipeGroup(name);
     setGroups((prev) => [...prev, group]);
+  }
+
+  async function handleRenameGroup(id: string, name: string) {
+    await renameRecipeGroup(id, name);
+    setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, name } : g)));
+  }
+
+  // Recipes stay saved — they just drop out of the deleted group. The
+  // assignments state change is what re-syncs the join table.
+  async function handleDeleteGroup(id: string) {
+    await deleteRecipeGroup(id);
+    setGroups((prev) => prev.filter((g) => g.id !== id));
+    setSelectedGroupIds((prev) => prev.filter((gid) => gid !== id));
+    setGroupAssignments((prev) =>
+      prev
+        ? Object.fromEntries(
+            Object.entries(prev)
+              .map(([recipeId, ids]) => [recipeId, ids.filter((gid) => gid !== id)] as const)
+              .filter(([, ids]) => ids.length > 0),
+          )
+        : prev,
+    );
   }
 
   function handleToggleRecipeGroup(recipeId: string, groupId: string) {
@@ -141,6 +166,11 @@ export default function MyRecipes() {
             onChange={setSelectedGroupIds}
           />
           <AddGroupPill onAdd={handleAddGroup} />
+          {groups.length > 0 && (
+            <button type="button" onClick={() => setManageGroupsOpen(true)} className={PILL_CLASS}>
+              Edit Groups
+            </button>
+          )}
         </div>
       )}
 
@@ -171,6 +201,21 @@ export default function MyRecipes() {
           />
         ))}
       </div>
+
+      {manageGroupsOpen && (
+        <ManageGroupsDialog
+          groups={groups}
+          recipeCounts={Object.fromEntries(
+            groups.map((g) => [
+              g.id,
+              Object.values(groupAssignments ?? {}).filter((ids) => ids.includes(g.id)).length,
+            ]),
+          )}
+          onRename={handleRenameGroup}
+          onDelete={handleDeleteGroup}
+          onClose={() => setManageGroupsOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -493,6 +538,136 @@ function GroupSearchDropdown({
         </div>
       )}
     </div>
+  );
+}
+
+// "Edit Groups": rename any group (type over its name; Enter or clicking
+// away saves) or delete it (two clicks). Deleting only removes the group —
+// the recipes in it stay saved.
+function ManageGroupsDialog({
+  groups,
+  recipeCounts,
+  onRename,
+  onDelete,
+  onClose,
+}: {
+  groups: RecipeGroup[];
+  recipeCounts: Record<string, number>;
+  onRename: (id: string, name: string) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  async function run(action: () => Promise<void>) {
+    setError(null);
+    try {
+      await action();
+    } catch {
+      setError("Something went wrong — try again.");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Edit groups"
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Edit groups</h2>
+            <p className="text-xs text-zinc-400">
+              Type over a name to rename it. Deleting a group keeps its recipes.
+            </p>
+          </div>
+          <button type="button" onClick={onClose} className={`${PILL_CLASS} shrink-0`}>
+            Done
+          </button>
+        </div>
+        <ul className="flex flex-col gap-2 overflow-y-auto px-5 py-4">
+          {groups.map((g) => (
+            <GroupEditRow
+              key={g.id}
+              group={g}
+              recipeCount={recipeCounts[g.id] ?? 0}
+              onRename={(name) => run(() => onRename(g.id, name))}
+              onDelete={() => run(() => onDelete(g.id))}
+            />
+          ))}
+          {groups.length === 0 && <li className="text-xs text-zinc-400">No groups left.</li>}
+        </ul>
+        {error && <p className="px-5 pb-3 text-xs text-rose-600 dark:text-rose-400">{error}</p>}
+      </div>
+    </div>
+  );
+}
+
+function GroupEditRow({
+  group,
+  recipeCount,
+  onRename,
+  onDelete,
+}: {
+  group: RecipeGroup;
+  recipeCount: number;
+  onRename: (name: string) => void;
+  onDelete: () => void;
+}) {
+  const [draft, setDraft] = useState(group.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Blank or unchanged names snap back to the saved one.
+  function commit() {
+    const name = draft.trim();
+    if (!name || name === group.name) {
+      setDraft(group.name);
+      return;
+    }
+    onRename(name);
+  }
+
+  return (
+    <li className="flex items-center gap-2">
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") setDraft(group.name);
+        }}
+        aria-label={`Name of group ${group.name}`}
+        className="min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-900 outline-none focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-500"
+      />
+      <span className="w-16 shrink-0 text-right text-[11px] text-zinc-400">
+        {recipeCount} recipe{recipeCount === 1 ? "" : "s"}
+      </span>
+      <button
+        type="button"
+        onClick={() => (confirmDelete ? onDelete() : setConfirmDelete(true))}
+        onBlur={() => setConfirmDelete(false)}
+        className={`shrink-0 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+          confirmDelete
+            ? "border-rose-500 bg-rose-500 text-white"
+            : "border-zinc-200 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+        }`}
+      >
+        {confirmDelete ? "Delete?" : "Delete"}
+      </button>
+    </li>
   );
 }
 

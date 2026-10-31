@@ -87,6 +87,29 @@ export async function addRecipeGroup(name: string): Promise<RecipeGroup> {
   return group;
 }
 
+export async function renameRecipeGroup(id: string, name: string): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  const { error } = await supabase.from("recipe_groups").update({ name }).eq("id", id).eq("user_id", userId);
+  assertNoError(error);
+}
+
+// Deletes the group itself and every recipe's membership in it — the
+// recipes stay saved. The assignments table has no foreign key to groups,
+// so those rows are cleared explicitly rather than cascading.
+export async function deleteRecipeGroup(id: string): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  const { error: assignmentsError } = await supabase
+    .from("recipe_group_assignments")
+    .delete()
+    .eq("group_id", id)
+    .eq("user_id", userId);
+  assertNoError(assignmentsError);
+  const { error } = await supabase.from("recipe_groups").delete().eq("id", id).eq("user_id", userId);
+  assertNoError(error);
+}
+
 export async function loadRecipeGroupAssignments(): Promise<RecipeGroupAssignments> {
   const supabase = createClient();
   const userId = await requireUserId(supabase);
