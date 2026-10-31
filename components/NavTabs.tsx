@@ -26,7 +26,7 @@ const AUTH_PATHS = ["/login", "/signup", "/forgot-password", "/forgot-username",
 export default function NavTabs() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user } = useUser();
+  const { user, mfaPending } = useUser();
   const [username, setUsername] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const isAuthPage = AUTH_PATHS.includes(pathname);
@@ -57,6 +57,13 @@ export default function NavTabs() {
       setIsAdmin(!!data.isAdmin);
     })();
   }, [user]);
+
+  // Password accepted but the authenticator code not entered yet (only
+  // possible for an account with an authenticator app set up) — the login
+  // isn't finished, so back to the login page's code step.
+  useEffect(() => {
+    if (mfaPending && !isAuthPage) router.replace("/login");
+  }, [mfaPending, isAuthPage, router]);
 
   async function handleLogOut() {
     const supabase = createClient();

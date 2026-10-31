@@ -83,11 +83,12 @@ export default async function AdminPage() {
   }
 
   // Once this account has a verified TOTP factor (see AdminMfaSetup
-  // below), every session must complete it before seeing anything past
-  // this point — not just the first time. Before enrollment, nextLevel
+  // below), every login must complete it at the login page (see
+  // components/auth/LoginForm.tsx) — a session that hasn't is sent back
+  // there. Before enrollment, nextLevel
   // stays 'aal1' (nothing to satisfy), so this is a no-op until then.
   if (!(await hasSatisfiedMfa(supabase))) {
-    redirect("/admin/verify-mfa");
+    redirect("/login");
   }
 
   const stats = await getStats();

@@ -33,3 +33,15 @@ export function createClient() {
     remembered ? undefined : { auth: { storage: window.sessionStorage } },
   );
 }
+
+// True when this session signed in with a password but the account has a
+// verified authenticator (TOTP) factor this session hasn't completed yet —
+// i.e. the login isn't finished. Only accounts that enrolled a factor (the
+// admin account) can ever be in this state. A failed check counts as "not
+// pending" so a network blip doesn't lock anyone out of the whole app; the
+// server-side admin and Optimize checks (lib/admin.ts) fail closed instead.
+export async function isMfaPending(supabase: ReturnType<typeof createClient>): Promise<boolean> {
+  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error || !data) return false;
+  return data.nextLevel === "aal2" && data.currentLevel !== "aal2";
+}

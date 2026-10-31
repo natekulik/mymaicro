@@ -44,7 +44,13 @@ export async function updateSession(request: NextRequest) {
   // The only redirect left: an already-logged-in visitor landing on
   // /login or /signup gets sent to the app instead of a form they don't
   // need. Nothing else is gated — see the file header above.
+  // Exception: a session still waiting on its authenticator code has to
+  // stay on /login — that's where the code step lives.
   if (user && (path === "/login" || path === "/signup")) {
+    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aal && aal.nextLevel === "aal2" && aal.currentLevel !== "aal2") {
+      return supabaseResponse;
+    }
     const url = request.nextUrl.clone();
     url.pathname = "/";
     return NextResponse.redirect(url);

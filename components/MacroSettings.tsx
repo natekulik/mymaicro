@@ -455,6 +455,7 @@ export default function MacroSettings() {
               label="Macro specific meals"
             />
             <InfoTooltip text="If you want to hit specific macros per meal, fill out the meals below — you can then track against them for each meal slot from the Plan tab. Leave this off if you only care about your daily total." />
+            <span className="text-xs text-zinc-400">For very specific diets only</span>
           </div>
           {profile.mealsEnabled && (
             <div className="flex items-center gap-3">
