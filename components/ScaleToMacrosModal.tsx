@@ -143,31 +143,30 @@ function ScaleToMacrosDialog({
 
   const day = days.find((d) => d.day === dayName);
   const mealGoals = profile.mealsEnabled ? profile.meals : [];
-  const mealOptions = (day?.subsections ?? []).filter((s) => mealGoals.some((m) => m.name === s));
+  // Every meal on that day can be picked — not just ones with a goal of their own.
+  const mealOptions = day?.subsections ?? [];
+  const chosenMeal = mealName && mealOptions.includes(mealName) ? mealName : "";
+  const mealGoal = chosenMeal ? mealGoals.find((m) => m.name === chosenMeal) : undefined;
 
-  // What one serving of this recipe should come to: the day's goal (or the
-  // chosen meal's goal) minus whatever's already planned there.
-  const remaining: Macro = useMemo(() => {
+  // What one serving of this recipe should come to.
+  //  - Rest of the day: the day's goal minus everything already planned.
+  //  - A meal with its own goal (Macro Specific Meals): that goal, treating
+  //    the meal as empty.
+  //  - Any other meal: the day's goal minus everything planned in the OTHER
+  //    meals, so whatever's in this one now is ignored (it's being replaced).
+  const remaining: Macro = (() => {
     if (!day) return ZERO;
-    const meal = mealName ? mealGoals.find((m) => m.name === mealName) : null;
-    if (meal && mealOptions.includes(mealName)) {
-      const planned = sumPlannedMeals(day.meals.filter((m) => m.subsection === mealName), recipes);
-      return {
-        protein: meal.macros.protein - (planned?.protein ?? 0),
-        carbs: meal.macros.carbs - (planned?.carbs ?? 0),
-        fat: meal.macros.fat - (planned?.fat ?? 0),
-      };
-    }
+    if (mealGoal) return { ...mealGoal.macros };
     const preset = day.macroPresetId ? presets.find((p) => p.id === day.macroPresetId) : null;
     const target = preset?.dailyTarget ?? profile.dailyTarget;
-    const planned = sumPlannedMeals(day.meals, recipes);
+    const plannedMeals = chosenMeal ? day.meals.filter((m) => m.subsection !== chosenMeal) : day.meals;
+    const planned = sumPlannedMeals(plannedMeals, recipes);
     return {
       protein: target.protein - (planned?.protein ?? 0),
       carbs: target.carbs - (planned?.carbs ?? 0),
       fat: target.fat - (planned?.fat ?? 0),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [day, mealName, recipes, presets, profile]);
+  })();
 
   const current = useMemo(() => recipePerServing(ingredients, servings), [ingredients, servings]);
   const gap: Macro = {
@@ -187,7 +186,11 @@ function ScaleToMacrosDialog({
     [ingredients, servings, remaining.protein, remaining.carbs, remaining.fat, picked],
   );
 
-  const goalLabel = mealName ? `${dayName}'s ${mealName}` : dayName;
+  const goalNote = !chosenMeal
+    ? `what's left of ${dayName} after your other planned meals`
+    : mealGoal
+      ? `your ${chosenMeal} goal for ${dayName}`
+      : `what's left of ${dayName} after your other meals — anything already in ${chosenMeal} is ignored`;
   const bigJumps = preview.changes.filter((c) => c.factor > 4 || c.factor < 0.1);
 
   function changeDay(next: string) {
@@ -220,7 +223,7 @@ function ScaleToMacrosDialog({
         {mealOptions.length > 0 && (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Which meal?</span>
-            <select value={mealName} onChange={(e) => setMealName(e.target.value)} className={selectClass}>
+            <select value={chosenMeal} onChange={(e) => setMealName(e.target.value)} className={selectClass}>
               <option value="">Rest of the day</option>
               {mealOptions.map((m) => (
                 <option key={m} value={m}>
@@ -317,8 +320,8 @@ function ScaleToMacrosDialog({
           />
         </div>
         <p className="mt-2 text-[11px] text-zinc-400">
-          Goal is what&apos;s left of {goalLabel} after your other planned meals, for one serving. Macros you leave
-          alone can move a little too, since the scaled ingredients carry some of each.
+          Goal is {goalNote}, for one serving. Macros you leave alone can move a little too, since the scaled
+          ingredients carry some of each.
         </p>
       </div>
 
