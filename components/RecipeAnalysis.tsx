@@ -600,8 +600,11 @@ export default function RecipeAnalysis() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
     setSaveError(null);
     setSavingToGroups(true);
+    // In Manual Entry the name box is editable after analyzing, so save what
+    // it says now rather than the title captured when the analysis ran.
+    const title = (mode === "manual" && manualTitle.trim()) || result.title;
     const patch = {
-      title: result.title,
+      title,
       sourceUrl: result.sourceUrl,
       servings: effectiveServings,
       nutrition,

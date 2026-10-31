@@ -133,3 +133,12 @@ export async function updateSavedRecipe(
   if (!data || data.length === 0) return null;
   return updated;
 }
+
+// Changes just a saved recipe's name — leaves everything else, including
+// savedAt, as it was.
+export async function renameSavedRecipe(id: string, title: string): Promise<void> {
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  const { error } = await supabase.from("saved_recipes").update({ title }).eq("id", id).eq("user_id", userId);
+  assertNoError(error);
+}

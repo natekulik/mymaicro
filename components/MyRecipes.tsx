@@ -3,22 +3,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import AccountRequiredPage from "./AccountRequiredPage";
-import { loadSavedRecipes, removeSavedRecipe, type SavedRecipe } from "@/lib/saved-recipes";
+import { loadSavedRecipes, removeSavedRecipe, renameSavedRecipe, type SavedRecipe } from "@/lib/saved-recipes";
 import { useUser } from "@/lib/supabase/use-user";
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
-import {
-  DAY_NAMES,
-  addMeal,
-  addMealToAllDays,
-  loadWeekOverrides,
-  loadWeeklyPlan,
-  resolveWeekDays,
-  saveWeekOverrides,
-  type DayPlan,
-  type WeekOverrides,
-  type WeeklyPlan,
-} from "@/lib/weekly-plan";
-import { mondayOfDate, todayDateString } from "@/lib/history";
 import {
   addRecipeGroup,
   addRecipeToGroup,
@@ -29,10 +16,6 @@ import {
   type RecipeGroup,
   type RecipeGroupAssignments,
 } from "@/lib/recipe-groups";
-
-// Sentinel value for the "All days" option in the day picker — distinct
-// from any real day name.
-const ALL_DAYS_VALUE = "__all__";
 
 // Closes a popover (the group search dropdown, "+ Add Group") on a click
 // anywhere outside it — the toggle button that opens it lives inside the
@@ -57,12 +40,6 @@ export default function MyRecipes() {
   const { user, loading: userLoading } = useUser();
   const [recipes, setRecipes] = useState<SavedRecipe[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [template, setTemplate] = useState<WeeklyPlan | null>(null);
-  const [weekOverrides, setWeekOverrides] = useState<WeekOverrides | null>(null);
-  // The quick-add here always targets the current calendar week — to plan
-  // a different week, use Weekly Plan's own week navigation and add
-  // recipes from there instead.
-  const [currentWeekStart, setCurrentWeekStart] = useState<string | null>(null);
   const [groups, setGroups] = useState<RecipeGroup[]>([]);
   const [groupAssignments, setGroupAssignments] = useState<RecipeGroupAssignments | null>(null);
   // Which groups are ticked in the group filter dropdown — empty shows
@@ -83,17 +60,12 @@ export default function MyRecipes() {
         setLoaded(true);
         return;
       }
-      const [loadedRecipes, loadedTemplate, loadedOverrides, loadedGroups, loadedAssignments] = await Promise.all([
+      const [loadedRecipes, loadedGroups, loadedAssignments] = await Promise.all([
         loadSavedRecipes(),
-        loadWeeklyPlan(),
-        loadWeekOverrides(),
         loadRecipeGroups(),
         loadRecipeGroupAssignments(),
       ]);
       setRecipes(loadedRecipes);
-      setTemplate(loadedTemplate);
-      setWeekOverrides(loadedOverrides);
-      setCurrentWeekStart(mondayOfDate(todayDateString()));
       setGroups(loadedGroups);
       setGroupAssignments(loadedAssignments);
       setLoaded(true);
@@ -101,27 +73,17 @@ export default function MyRecipes() {
   }, [userLoading, user]);
 
   useEffect(() => {
-    if (weekOverrides) void saveWeekOverrides(weekOverrides);
-  }, [weekOverrides]);
-
-  useEffect(() => {
     if (groupAssignments) void saveRecipeGroupAssignments(groupAssignments);
   }, [groupAssignments]);
-
-  const weekDays =
-    template && weekOverrides && currentWeekStart
-      ? resolveWeekDays(currentWeekStart, template, weekOverrides)
-      : null;
-
-  function mutateWeek(updater: (days: DayPlan[]) => DayPlan[]) {
-    if (!weekDays || !currentWeekStart) return;
-    const nextDays = updater(weekDays);
-    setWeekOverrides((prev) => ({ ...(prev ?? {}), [currentWeekStart]: nextDays }));
-  }
 
   async function handleRemove(id: string) {
     await removeSavedRecipe(id);
     setRecipes((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  async function handleRename(id: string, title: string) {
+    await renameSavedRecipe(id, title);
+    setRecipes((prev) => prev.map((r) => (r.id === id ? { ...r, title } : r)));
   }
 
   async function handleAddGroup(name: string) {
@@ -192,21 +154,17 @@ export default function MyRecipes() {
       {loaded && recipes.length > 0 && visibleRecipes.length === 0 && (
         <p className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
           No recipes in &quot;{selectedGroupNames}&quot; yet — open a recipe below and use &quot;+
-          Add to Group&quot; to put it here.
+          Group&quot; to put it here.
         </p>
       )}
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {visibleRecipes.map((recipe) => (
           <RecipeCard
             key={recipe.id}
             recipe={recipe}
             onRemove={() => handleRemove(recipe.id)}
-            weekDays={weekDays}
-            onAddMeal={(day, subsection) => mutateWeek((days) => addMeal(days, day, subsection, recipe.id))}
-            onAddMealAllDays={(subsection) =>
-              mutateWeek((days) => addMealToAllDays(days, subsection, recipe.id))
-            }
+            onRename={(title) => handleRename(recipe.id, title)}
             groups={groups}
             assignedGroupIds={groupAssignments?.[recipe.id] ?? []}
             onToggleGroup={(groupId) => handleToggleRecipeGroup(recipe.id, groupId)}
@@ -217,241 +175,228 @@ export default function MyRecipes() {
   );
 }
 
+// The small outlined buttons along the bottom of each recipe card.
+const PILL_CLASS =
+  "whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800";
+
+function MacroInline({ accent, value, letter }: { accent: string; value: number | null; letter: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span className={`h-1.5 w-1.5 rounded-full ${accent}`} />
+      {value !== null ? Math.round(value) : "—"}g {letter}
+    </span>
+  );
+}
+
 function RecipeCard({
   recipe,
   onRemove,
-  weekDays,
-  onAddMeal,
-  onAddMealAllDays,
+  onRename,
   groups,
   assignedGroupIds,
   onToggleGroup,
 }: {
   recipe: SavedRecipe;
   onRemove: () => void;
-  weekDays: DayPlan[] | null;
-  onAddMeal: (day: string, subsection: string) => void;
-  onAddMealAllDays: (subsection: string) => void;
+  onRename: (title: string) => void;
   groups: RecipeGroup[];
   assignedGroupIds: string[];
   onToggleGroup: (groupId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Esc closes the details pop-up.
+  useEffect(() => {
+    if (!expanded) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setExpanded(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [expanded]);
+  const [renaming, setRenaming] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  function startRename() {
+    setDraftTitle(recipe.title);
+    setRenaming(true);
+  }
+
+  // Blank or unchanged names are just dropped, so the title can never be
+  // emptied out by accident.
+  function commitRename() {
+    const title = draftTitle.trim();
+    setRenaming(false);
+    if (title && title !== recipe.title) onRename(title);
+  }
 
   return (
     <section
-      className="grid row-span-5 [grid-template-rows:subgrid] gap-3 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900"
+      className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900"
     >
-      <div className="flex items-start justify-between gap-3">
-        <h2 className="min-w-0 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          {recipe.title}
-        </h2>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="whitespace-nowrap text-xs text-zinc-400">
-            Makes {recipe.servings} serving{recipe.servings === 1 ? "" : "s"}
-          </span>
-          <button
-            type="button"
-            onClick={onRemove}
-            className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-          >
-            Remove
-          </button>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          {renaming ? (
+            <input
+              type="text"
+              autoFocus
+              onFocus={(e) => e.target.select()}
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setRenaming(false);
+              }}
+              aria-label="Recipe name"
+              className="w-full rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-sm font-semibold text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-50"
+            />
+          ) : (
+            <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              <button
+                type="button"
+                onClick={startRename}
+                title="Click to rename"
+                className="block w-full cursor-text text-left decoration-zinc-300 decoration-dotted underline-offset-4 hover:underline"
+              >
+                {/* Up to two lines; anything longer is cut off with "…" */}
+                <span className="line-clamp-2 break-words">{recipe.title}</span>
+              </button>
+            </h2>
+          )}
+          <p className="text-[11px] text-zinc-400">
+            Makes {recipe.servings} serving{recipe.servings === 1 ? "" : "s"} · macros per serving
+          </p>
         </div>
+        {/* Two clicks to delete: the first arms it, the second confirms;
+            clicking anywhere else disarms it. */}
+        <button
+          type="button"
+          onClick={() => (confirmRemove ? onRemove() : setConfirmRemove(true))}
+          onBlur={() => setConfirmRemove(false)}
+          aria-label={confirmRemove ? "Confirm remove recipe" : "Remove recipe"}
+          title={confirmRemove ? "Click again to remove" : "Remove"}
+          className={
+            confirmRemove
+              ? "shrink-0 rounded-md bg-rose-500 px-2 py-0.5 text-[11px] font-medium text-white"
+              : "shrink-0 px-1 text-zinc-300 transition hover:text-rose-500 dark:text-zinc-600"
+          }
+        >
+          {confirmRemove ? "Remove?" : "✕"}
+        </button>
       </div>
 
-      <div className="flex flex-col items-start gap-1">
-        <Link
-          href={`/recipe-analysis?edit=${recipe.id}`}
-          className="whitespace-nowrap rounded-full border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
-        >
-          Edit Recipe
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-300">
+        <span className="font-semibold text-zinc-900 dark:text-zinc-50">
+          {recipe.nutrition.calories !== null ? Math.round(recipe.nutrition.calories) : "—"}{" "}
+          <span className="font-normal text-zinc-400">cal</span>
+        </span>
+        <MacroInline accent="bg-rose-500" value={recipe.nutrition.protein} letter="P" />
+        <MacroInline accent="bg-amber-500" value={recipe.nutrition.carbs} letter="C" />
+        <MacroInline accent="bg-sky-500" value={recipe.nutrition.fat} letter="F" />
+      </div>
+
+      {/* mt-auto: cards in the same row stretch to the tallest one, with the
+          buttons kept along the bottom edge. */}
+      <div className="mt-auto flex flex-wrap items-center gap-1.5">
+        <Link href={`/recipe-analysis?edit=${recipe.id}`} className={PILL_CLASS}>
+          Edit
         </Link>
+        <button type="button" onClick={() => setExpanded((e) => !e)} className={PILL_CLASS}>
+          Details {expanded ? "▴" : "▾"}
+        </button>
+        {groups.length > 0 && (
+          <GroupAssignControl groups={groups} assignedGroupIds={assignedGroupIds} onToggle={onToggleGroup} />
+        )}
         {recipe.sourceUrl && (
           <a
             href={recipe.sourceUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-zinc-400 underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300"
+            className="text-[11px] text-zinc-400 underline decoration-dotted hover:text-zinc-600 dark:hover:text-zinc-300"
           >
-            View source
+            Source
           </a>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <MiniStat label="Calories" value={recipe.nutrition.calories} unit="cals" />
-        <MiniStat label="Protein" value={recipe.nutrition.protein} unit="g" accent="bg-rose-500" />
-        <MiniStat label="Carbs" value={recipe.nutrition.carbs} unit="g" accent="bg-amber-500" />
-        <MiniStat label="Fat" value={recipe.nutrition.fat} unit="g" accent="bg-sky-500" />
-      </div>
-
-      <div className="flex flex-col items-start gap-2">
-        <p className="text-xs text-zinc-400">Per serving.</p>
-        <div className="flex flex-wrap items-start gap-2">
-          <button
-            type="button"
-            onClick={() => setExpanded((e) => !e)}
-            className="inline-flex items-center gap-1 self-start rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-          >
-            {expanded ? "Hide details" : "Show ingredients & micros"}
-          </button>
-
-          {weekDays && (
-            <AddToPlanControl
-              recipeId={recipe.id}
-              weekDays={weekDays}
-              onAdd={onAddMeal}
-              onAddAllDays={onAddMealAllDays}
-            />
-          )}
-
-          {groups.length > 0 && (
-            <GroupAssignControl groups={groups} assignedGroupIds={assignedGroupIds} onToggle={onToggleGroup} />
-          )}
-        </div>
-      </div>
-
       {expanded && (
-        <div className="flex flex-col gap-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-          <div>
-            <h3 className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              Ingredients
-            </h3>
-            <ul className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-300">
-              {recipe.ingredients.map((ingredient, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="text-zinc-300 dark:text-zinc-600">•</span>
-                  {ingredient}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <h3 className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              Micros (per serving)
-            </h3>
-            <div className="grid grid-cols-2 gap-3">
-              {MICRO_NUTRIENTS.map((def) => {
-                const value = recipe.micros[def.key] ?? null;
-                return (
-                  <MiniStat
-                    key={def.key}
-                    label={def.label}
-                    value={value}
-                    unit={def.unit}
-                    level={value !== null ? dailyValueLevel(def.key, value) : null}
-                  />
-                );
-              })}
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setExpanded(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${recipe.title} details`}
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-5 py-4 dark:border-zinc-800">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{recipe.title}</h2>
+                <p className="text-xs text-zinc-400">
+                  Makes {recipe.servings} serving{recipe.servings === 1 ? "" : "s"} · numbers below are per
+                  serving
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                aria-label="Close"
+                className="shrink-0 rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              >
+                Close ✕
+              </button>
             </div>
-            <p className="mt-2 text-right text-[10px] leading-tight text-zinc-400">
-              &ldquo;High&rdquo; / &ldquo;Low&rdquo; based on FDA Daily Values for a 2,000-calorie
-              diet.
-            </p>
+            <div className="flex flex-col gap-5 overflow-y-auto px-5 py-4">
+              <div className="grid grid-cols-4 gap-2">
+                <MiniStat label="Calories" value={recipe.nutrition.calories} unit="cals" />
+                <MiniStat label="Protein" value={recipe.nutrition.protein} unit="g" accent="bg-rose-500" />
+                <MiniStat label="Carbs" value={recipe.nutrition.carbs} unit="g" accent="bg-amber-500" />
+                <MiniStat label="Fat" value={recipe.nutrition.fat} unit="g" accent="bg-sky-500" />
+              </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+            Ingredients
+          </h3>
+          <ul className="flex flex-col gap-1 text-sm text-zinc-600 dark:text-zinc-300">
+            {recipe.ingredients.map((ingredient, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-zinc-300 dark:text-zinc-600">•</span>
+                {ingredient}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h3 className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-300">
+            Micros (per serving)
+          </h3>
+          <div className="grid grid-cols-2 gap-3">
+            {MICRO_NUTRIENTS.map((def) => {
+              const value = recipe.micros[def.key] ?? null;
+              return (
+                <MiniStat
+                  key={def.key}
+                  label={def.label}
+                  value={value}
+                  unit={def.unit}
+                  level={value !== null ? dailyValueLevel(def.key, value) : null}
+                />
+              );
+            })}
+          </div>
+          <p className="mt-2 text-right text-[10px] leading-tight text-zinc-400">
+            &ldquo;High&rdquo; / &ldquo;Low&rdquo; based on FDA Daily Values for a 2,000-calorie
+            diet.
+          </p>
+        </div>
+            </div>
           </div>
         </div>
       )}
     </section>
-  );
-}
-
-function AddToPlanControl({
-  recipeId,
-  weekDays,
-  onAdd,
-  onAddAllDays,
-}: {
-  recipeId: string;
-  weekDays: DayPlan[];
-  onAdd: (day: string, subsection: string) => void;
-  onAddAllDays: (subsection: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [day, setDay] = useState<string>(DAY_NAMES[0]);
-  const dayPlan = weekDays.find((d) => d.day === day);
-  // "All days" mode has no single day's subsection list to draw from, so it
-  // offers the union of every day's subsections — addAllDays skips any day
-  // that doesn't actually have the chosen one.
-  const allSubsections = Array.from(new Set(weekDays.flatMap((d) => d.subsections)));
-  const isAllDays = day === ALL_DAYS_VALUE;
-  const subsectionOptions = isAllDays ? allSubsections : (dayPlan?.subsections ?? []);
-  const [subsection, setSubsection] = useState(subsectionOptions[0] ?? "");
-
-  // Already on the day+subsection currently selected — only meaningful for
-  // a single day (in "All days" mode it's always a partial fill at worst,
-  // never fully blocked, so the button stays enabled there).
-  const alreadyOnDay =
-    !isAllDays && !!dayPlan?.meals.some((m) => m.subsection === subsection && m.recipeId === recipeId);
-
-  function handleDayChange(nextDay: string) {
-    setDay(nextDay);
-    const nextOptions =
-      nextDay === ALL_DAYS_VALUE
-        ? allSubsections
-        : (weekDays.find((d) => d.day === nextDay)?.subsections ?? []);
-    setSubsection(nextOptions[0] ?? "");
-  }
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!subsection) return;
-    if (isAllDays) {
-      onAddAllDays(subsection);
-    } else {
-      if (alreadyOnDay) return;
-      onAdd(day, subsection);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1 self-start rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-      >
-        + Add to This Week
-      </button>
-
-      {open && (
-        <form
-          onSubmit={handleSubmit}
-          className="flex flex-wrap items-center gap-1.5 rounded-lg bg-zinc-50 px-2.5 py-2 dark:bg-zinc-800"
-        >
-          <select
-            value={day}
-            onChange={(e) => handleDayChange(e.target.value)}
-            className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-          >
-            <option value={ALL_DAYS_VALUE}>All days</option>
-            {DAY_NAMES.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
-          <select
-            value={subsection}
-            onChange={(e) => setSubsection(e.target.value)}
-            className="rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
-          >
-            {subsectionOptions.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-          <button
-            type="submit"
-            disabled={!subsection || alreadyOnDay}
-            className="rounded-md bg-zinc-700 px-2.5 py-1 text-xs font-medium text-white transition hover:bg-zinc-600 disabled:opacity-50 dark:bg-zinc-600 dark:hover:bg-zinc-500"
-          >
-            {alreadyOnDay ? "Already added" : "Add"}
-          </button>
-        </form>
-      )}
-    </div>
   );
 }
 
@@ -609,21 +554,18 @@ function GroupAssignControl({
   onToggle: (groupId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const containerRef = useCloseOnOutsideClick<HTMLDivElement>(open, () => setOpen(false));
   const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
   const isAssigned = groupId ? assignedGroupIds.includes(groupId) : false;
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1 self-start rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-      >
-        + Add to Group
+    <div ref={containerRef} className="relative">
+      <button type="button" onClick={() => setOpen((o) => !o)} title="Add to a group" className={PILL_CLASS}>
+        + Group
       </button>
 
       {open && (
-        <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-zinc-50 px-2.5 py-2 dark:bg-zinc-800">
+        <div className="absolute left-0 top-full z-30 mt-1 flex w-64 flex-wrap items-center gap-1.5 rounded-xl border border-zinc-200 bg-white p-2.5 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <select
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
