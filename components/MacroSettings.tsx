@@ -459,9 +459,13 @@ export default function MacroSettings() {
           </div>
           {profile.mealsEnabled && (
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full border border-zinc-200 px-1 dark:border-zinc-800">
+              <div className="flex items-center gap-2 rounded-full border border-zinc-200 py-0.5 pr-1 pl-3 dark:border-zinc-800">
+                <span className="whitespace-nowrap text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  Number of meals
+                </span>
                 <button
                   type="button"
+                  aria-label="Fewer meals"
                   onClick={() => updateMealCount(profile.meals.length - 1)}
                   disabled={profile.meals.length <= MIN_MEALS}
                   className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
@@ -473,6 +477,7 @@ export default function MacroSettings() {
                 </span>
                 <button
                   type="button"
+                  aria-label="More meals"
                   onClick={() => updateMealCount(profile.meals.length + 1)}
                   disabled={profile.meals.length >= MAX_MEALS}
                   className="flex h-7 w-7 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:opacity-30 dark:hover:bg-zinc-800"
