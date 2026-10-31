@@ -10,7 +10,7 @@
 // a time.
 
 import type { Macro } from "./macro";
-import type { IngredientMacroDetail } from "./recipe-types";
+import type { IngredientMacroDetail, MicroTotals, NutritionMacro } from "./recipe-types";
 import { parseIngredientLine } from "./usda/parse-ingredient";
 
 export type MacroKey = keyof Macro;
@@ -266,4 +266,42 @@ export function previewScale(
   });
 
   return { changes, after, unscalable };
+}
+
+// The recipe as it stands once `changes` are applied: its ingredient lines,
+// and per-serving nutrition / micros recomputed from the scaled ingredients.
+// Used to save a scaled copy of a recipe.
+export function applyScaleToDetails(
+  details: IngredientMacroDetail[],
+  changes: ScaleChange[],
+  servings: number,
+): { ingredients: string[]; nutrition: NutritionMacro; micros: MicroTotals } {
+  const byIndex = new Map(changes.map((c) => [c.index, c]));
+  const total = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+  const micros: MicroTotals = {};
+
+  const ingredients = details.map((d, i) => {
+    const change = byIndex.get(i);
+    const factor = change?.factor ?? 1;
+    total.calories += (d.macros?.calories ?? 0) * factor;
+    total.protein += (d.macros?.protein ?? 0) * factor;
+    total.carbs += (d.macros?.carbs ?? 0) * factor;
+    total.fat += (d.macros?.fat ?? 0) * factor;
+    for (const [key, value] of Object.entries(d.micros ?? {})) {
+      if (typeof value === "number") micros[key] = (micros[key] ?? 0) + value * factor;
+    }
+    return change?.newText ?? d.raw;
+  });
+
+  for (const key of Object.keys(micros)) micros[key] /= servings;
+  return {
+    ingredients,
+    nutrition: {
+      calories: total.calories / servings,
+      protein: total.protein / servings,
+      carbs: total.carbs / servings,
+      fat: total.fat / servings,
+    },
+    micros,
+  };
 }

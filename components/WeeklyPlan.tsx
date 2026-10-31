@@ -20,6 +20,7 @@ import {
   sumPlannedMeals,
   type DayPlan,
   type DayTotals,
+  type PlannedMeal,
   type WeekOverrides,
   type WeeklyPlan as WeeklyPlanData,
   type WeeklyPreset,
@@ -40,6 +41,7 @@ import {
 import ProgressRow from "./ProgressRow";
 import HistoricalPlan from "./HistoricalPlan";
 import AccountRequiredPage from "./AccountRequiredPage";
+import { ScaleSavedRecipeModal } from "./ScaleToMacrosModal";
 import { useUser } from "@/lib/supabase/use-user";
 
 // Snapshot for the one-level "paste to all days" undo — tagged with the
@@ -74,6 +76,13 @@ export default function WeeklyPlan() {
   // Which day's subsections are expanded below the day strip — clicking a
   // day pill toggles it open/closed; only one day is open at a time.
   const [openDay, setOpenDay] = useState<string | null>(null);
+  // The planned meal whose recipe is open in the "Scale to my plan" pop-up.
+  const [scaleMeal, setScaleMeal] = useState<{
+    mealId: string;
+    recipeId: string;
+    subsection: string;
+    day: string;
+  } | null>(null);
   // Two-click confirm for the destructive "paste to all days" action — a
   // first click arms that day, a second click on the *same* day executes
   // it; clicking a different day's paste button just re-arms that one
@@ -412,8 +421,39 @@ export default function WeeklyPlan() {
             mutateWeek((days) => addMealInDays(days, openDayPlan.day, subsection, recipeId))
           }
           onRemoveMeal={(mealId) => mutateWeek((days) => removeMealInDays(days, openDayPlan.day, mealId))}
+          onScaleMeal={(meal) =>
+            setScaleMeal({
+              mealId: meal.id,
+              recipeId: meal.recipeId,
+              subsection: meal.subsection,
+              day: openDayPlan.day,
+            })
+          }
         />
       )}
+
+      {scaleMeal &&
+        (() => {
+          const recipe = recipes.find((r) => r.id === scaleMeal.recipeId);
+          if (!recipe) return null;
+          return (
+            <ScaleSavedRecipeModal
+              recipe={recipe}
+              dayName={scaleMeal.day}
+              subsection={scaleMeal.subsection}
+              mealId={scaleMeal.mealId}
+              days={weekDays}
+              recipes={recipes}
+              onClose={() => setScaleMeal(null)}
+              onApplied={(scaled) => {
+                // Same recipe id, new numbers — every place it's planned
+                // (and the day's progress bars) picks them up.
+                setRecipes((prev) => prev.map((r) => (r.id === scaled.id ? scaled : r)));
+                setScaleMeal(null);
+              }}
+            />
+          );
+        })()}
 
       <section className="flex flex-col gap-4 border-t border-zinc-200 pt-8 dark:border-zinc-800">
         <div className="flex flex-col gap-1">
@@ -455,6 +495,7 @@ function DayDetail({
   onRemoveSubsection,
   onAddMeal,
   onRemoveMeal,
+  onScaleMeal,
 }: {
   day: DayPlan;
   recipes: SavedRecipe[];
@@ -473,6 +514,7 @@ function DayDetail({
   onRemoveSubsection: (subsection: string) => void;
   onAddMeal: (subsection: string, recipeId: string) => void;
   onRemoveMeal: (mealId: string) => void;
+  onScaleMeal: (meal: PlannedMeal) => void;
 }) {
   const [newSubsection, setNewSubsection] = useState("");
   // Which subsection's macro-alignment breakdown is expanded — clicking a
@@ -674,13 +716,24 @@ function DayDetail({
                               </span>
                             )}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => onRemoveMeal(meal.id)}
-                            className="shrink-0 text-zinc-400 transition hover:text-rose-500"
-                          >
-                            ×
-                          </button>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {recipe && (
+                              <button
+                                type="button"
+                                onClick={() => onScaleMeal(meal)}
+                                className="whitespace-nowrap rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-500 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                              >
+                                Scale to my plan
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => onRemoveMeal(meal.id)}
+                              className="text-zinc-400 transition hover:text-rose-500"
+                            >
+                              ×
+                            </button>
+                          </div>
                         </li>
                       );
                     })}

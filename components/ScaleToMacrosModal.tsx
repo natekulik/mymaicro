@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { IngredientMacroDetail } from "@/lib/recipe-types";
+import type { IngredientMacroDetail, RecipeResult } from "@/lib/recipe-types";
 import { calories, type Macro, type MacroProfile } from "@/lib/macro";
 import { loadMacroPresets, type MacroPreset } from "@/lib/macro-presets";
 import { loadProfile } from "@/lib/storage";
-import { loadSavedRecipes, type SavedRecipe } from "@/lib/saved-recipes";
+import { loadSavedRecipes, updateSavedRecipe, type SavedRecipe } from "@/lib/saved-recipes";
 import { dayNameForDate, mondayOfDate, todayDateString } from "@/lib/history";
 import {
   type DayPlan,
@@ -16,6 +16,7 @@ import {
 } from "@/lib/weekly-plan";
 import {
   SCALE_MACROS,
+  applyScaleToDetails,
   type MacroKey,
   type ScaleChange,
   type ScalePick,
@@ -124,27 +125,45 @@ function ScaleToMacrosDialog({
   ctx,
   ingredients,
   servings,
+  fixedDay,
+  initialMeal,
+  excludeMealId,
+  note,
   onClose,
   onApply,
 }: {
   ctx: ScalePlanContext;
   ingredients: IngredientMacroDetail[];
   servings: number;
+  // Opened from a specific day on the Plan page: the day is fixed rather
+  // than chosen, and the meal starts on the recipe's own slot.
+  fixedDay?: string;
+  initialMeal?: string;
+  // The planned meal entry being scaled — left out of "what's already
+  // planned", since it's the very thing being resized.
+  excludeMealId?: string;
+  // Small print under the buttons (what Apply will actually do).
+  note?: string;
   onClose: () => void;
   onApply: (changes: ScaleChange[]) => void;
 }) {
   const { profile, presets, days, recipes, todayName } = ctx;
-  const initialDay = days.some((d) => d.day === todayName) ? todayName : (days[0]?.day ?? "");
+  const initialDay =
+    fixedDay ?? (days.some((d) => d.day === todayName) ? todayName : (days[0]?.day ?? ""));
   const [dayName, setDayName] = useState(initialDay);
   // "" = the whole rest of the day; otherwise the name of one meal.
-  const [mealName, setMealName] = useState("");
+  const [mealName, setMealName] = useState(initialMeal ?? "");
   // macro -> index of the ingredient picked to make it up ("" = none)
   const [picked, setPicked] = useState<Record<MacroKey, string>>({ protein: "", carbs: "", fat: "" });
 
   const day = days.find((d) => d.day === dayName);
   const mealGoals = profile.mealsEnabled ? profile.meals : [];
-  // Every meal on that day can be picked — not just ones with a goal of their own.
-  const mealOptions = day?.subsections ?? [];
+  // The dropdown always shows. Single meals are only listed when Macro
+  // Specific Meals is on (Daily Macros); otherwise "Rest of the day" is the
+  // only choice.
+  // With it on, every meal on that day can be picked — not just ones with a
+  // goal of their own.
+  const mealOptions = profile.mealsEnabled ? (day?.subsections ?? []) : [];
   const chosenMeal = mealName && mealOptions.includes(mealName) ? mealName : "";
   const mealGoal = chosenMeal ? mealGoals.find((m) => m.name === chosenMeal) : undefined;
 
@@ -159,7 +178,9 @@ function ScaleToMacrosDialog({
     if (mealGoal) return { ...mealGoal.macros };
     const preset = day.macroPresetId ? presets.find((p) => p.id === day.macroPresetId) : null;
     const target = preset?.dailyTarget ?? profile.dailyTarget;
-    const plannedMeals = chosenMeal ? day.meals.filter((m) => m.subsection !== chosenMeal) : day.meals;
+    const plannedMeals = day.meals.filter(
+      (m) => m.id !== excludeMealId && (!chosenMeal || m.subsection !== chosenMeal),
+    );
     const planned = sumPlannedMeals(plannedMeals, recipes);
     return {
       protein: target.protein - (planned?.protein ?? 0),
@@ -203,36 +224,36 @@ function ScaleToMacrosDialog({
       <div>
         <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">Scale to my plan</h2>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Pick the ingredients to scale, and one serving of this recipe is resized to fill what&apos;s left of your
-          plan.
+          {fixedDay ? `Scaling for ${fixedDay}. ` : ""}Pick the ingredients to scale, and one serving of this recipe is
+          resized to fill what&apos;s left of your plan.
         </p>
       </div>
 
-      <div className={`grid gap-3 ${mealOptions.length > 0 ? "grid-cols-2" : "grid-cols-1"}`}>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Which day?</span>
-          <select value={dayName} onChange={(e) => changeDay(e.target.value)} className={selectClass}>
-            {days.map((d) => (
-              <option key={d.day} value={d.day}>
-                {d.day}
-                {d.day === todayName ? " (today)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        {mealOptions.length > 0 && (
+      <div className={`grid gap-3 ${fixedDay ? "grid-cols-1" : "grid-cols-2"}`}>
+        {!fixedDay && (
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Which meal?</span>
-            <select value={chosenMeal} onChange={(e) => setMealName(e.target.value)} className={selectClass}>
-              <option value="">Rest of the day</option>
-              {mealOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
+            <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Which day?</span>
+            <select value={dayName} onChange={(e) => changeDay(e.target.value)} className={selectClass}>
+              {days.map((d) => (
+                <option key={d.day} value={d.day}>
+                  {d.day}
+                  {d.day === todayName ? " (today)" : ""}
                 </option>
               ))}
             </select>
           </label>
         )}
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Which meal?</span>
+          <select value={chosenMeal} onChange={(e) => setMealName(e.target.value)} className={selectClass}>
+            <option value="">Rest of the day</option>
+            {mealOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
@@ -325,6 +346,7 @@ function ScaleToMacrosDialog({
         </p>
       </div>
 
+      {note && <p className="text-[11px] text-zinc-400">{note}</p>}
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className={SECONDARY_BUTTON}>
           Cancel
@@ -380,5 +402,118 @@ function Row({
         {unit}
       </span>
     </>
+  );
+}
+
+// "Scale to my plan" from a recipe already on the Plan page. A saved recipe
+// only stores its ingredient lines and final numbers, so its ingredients are
+// matched again here to get per-ingredient nutrition. Applying updates the
+// saved recipe itself (same id, so it stays in place everywhere it's
+// planned and in My Recipes).
+export function ScaleSavedRecipeModal({
+  recipe,
+  dayName,
+  subsection,
+  mealId,
+  days,
+  recipes,
+  onClose,
+  onApplied,
+}: {
+  recipe: SavedRecipe;
+  dayName: string;
+  subsection: string;
+  mealId: string;
+  days: DayPlan[];
+  recipes: SavedRecipe[];
+  onClose: () => void;
+  onApplied: (scaled: SavedRecipe) => void;
+}) {
+  const [loaded, setLoaded] = useState<{
+    profile: MacroProfile;
+    presets: MacroPreset[];
+    details: IngredientMacroDetail[];
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const [profile, presets, res] = await Promise.all([
+          loadProfile(),
+          loadMacroPresets(),
+          fetch("/api/analyze-recipe-manual", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: recipe.title,
+              text: recipe.ingredients.join("\n"),
+              servings: recipe.servings,
+            }),
+          }),
+        ]);
+        const data = (await res.json()) as RecipeResult & { error?: string };
+        if (!res.ok) throw new Error(data.error ?? "analysis failed");
+        if (active) setLoaded({ profile, presets, details: data.ingredientDetails });
+      } catch {
+        if (active) setError("Couldn't load this recipe's ingredients — try again.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [recipe]);
+
+  async function handleApply(changes: ScaleChange[]) {
+    if (!loaded || saving) return;
+    setSaving(true);
+    try {
+      const { ingredients, nutrition, micros } = applyScaleToDetails(loaded.details, changes, recipe.servings);
+      const scaled = await updateSavedRecipe(recipe.id, {
+        title: recipe.title,
+        sourceUrl: recipe.sourceUrl,
+        servings: recipe.servings,
+        nutrition,
+        micros,
+        ingredients,
+      });
+      if (!scaled) {
+        setError("Couldn't find that recipe to update — it may have been removed.");
+        setSaving(false);
+        return;
+      }
+      onApplied(scaled);
+    } catch {
+      setError("Couldn't save the scaled recipe — try again.");
+      setSaving(false);
+    }
+  }
+
+  if (!loaded) {
+    return (
+      <Backdrop onClose={onClose}>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">{error ?? `Reading ${recipe.title}'s ingredients…`}</p>
+        {error && (
+          <button type="button" onClick={onClose} className={SECONDARY_BUTTON}>
+            Close
+          </button>
+        )}
+      </Backdrop>
+    );
+  }
+  return (
+    <ScaleToMacrosDialog
+      ctx={{ profile: loaded.profile, presets: loaded.presets, days, recipes, todayName: dayName }}
+      ingredients={loaded.details}
+      servings={recipe.servings}
+      fixedDay={dayName}
+      initialMeal={subsection}
+      excludeMealId={mealId}
+      note="Apply updates this recipe in My Recipes with the new amounts — it changes everywhere the recipe is planned."
+      onClose={onClose}
+      onApply={(changes) => void handleApply(changes)}
+    />
   );
 }
