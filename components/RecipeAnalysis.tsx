@@ -13,6 +13,8 @@ import { loadSavedRecipes, saveRecipe, updateSavedRecipe } from "@/lib/saved-rec
 import { useUser } from "@/lib/supabase/use-user";
 import { assignRecipeToGroups } from "@/lib/recipe-groups";
 import SaveToGroupPrompt from "./SaveToGroupPrompt";
+import ScaleToMacrosModal from "./ScaleToMacrosModal";
+import type { ScaleChange } from "@/lib/scale-to-macros";
 import SignUpPrompt from "./SignUpPrompt";
 
 type Mode = "url" | "manual";
@@ -128,6 +130,8 @@ const ANALYZE_INFO =
   "Reads the recipe's ingredients and estimates calories, protein, carbs, fat, and micronutrients per serving, matched against the USDA food database.";
 const OPTIMIZE_INFO =
   "Asks Claude for two ideas toward more or less protein, carbs, or fat — swaps for two different ingredients (apply either or both) or two options for the same one — verified against real USDA data before you see them. Nothing changes until you confirm. Needs a free account, capped at 50 uses for now.";
+const SCALE_INFO =
+  "Resizes the ingredients you pick so one serving fills whatever macros are left in your plan for a day (or a meal) — e.g. more potatoes for carbs and more avocado for fat. Needs a free account.";
 const SAVE_RECIPE_INFO =
   "Saves this recipe's ingredients and nutrition breakdown to your account so you can find it again later, from My Recipes. Needs a free account.";
 
@@ -181,7 +185,7 @@ export default function RecipeAnalysis() {
   // Which action opened the prompt — the modal is one shared instance, so
   // this is what makes its message describe the thing that actually
   // needed an account instead of always saying the same one.
-  const [signUpPromptReason, setSignUpPromptReason] = useState<"save" | "optimize">("save");
+  const [signUpPromptReason, setSignUpPromptReason] = useState<"save" | "optimize" | "scale">("save");
   const [mode, setMode] = useState<Mode>("url");
 
   const [url, setUrl] = useState("");
@@ -239,6 +243,8 @@ export default function RecipeAnalysis() {
   // The current pending suggestion, shown in a confirm modal — nothing is
   // applied to the recipe until the user explicitly confirms it.
   const [optimizeResult, setOptimizeResult] = useState<OptimizeResult | null>(null);
+  // The "Scale to my macros" pop-up.
+  const [scaleOpen, setScaleOpen] = useState(false);
 
   const effectiveServings = servingsInput.trim() ? Number(servingsInput) : null;
   const hasValidServings = effectiveServings !== null && effectiveServings > 0;
@@ -546,6 +552,66 @@ export default function RecipeAnalysis() {
     }
   }
 
+  function handleScaleClick() {
+    if (!user) {
+      setSignUpPromptReason("scale");
+      setSignUpPromptOpen(true);
+      return;
+    }
+    setScaleOpen(true);
+  }
+
+  // Resizes the picked ingredients: rewrites each line's quantity and
+  // scales its already-matched nutrition by the same factor, the same
+  // override mechanism a swap from Optimize uses.
+  function applyScaleChanges(changes: ScaleChange[]) {
+    if (changes.length === 0) return;
+    const scaleValues = <T extends Record<string, number> | null>(values: T, factor: number): T =>
+      (values
+        ? Object.fromEntries(Object.entries(values).map(([k, v]) => [k, typeof v === "number" ? v * factor : v]))
+        : values) as T;
+
+    setResult((prev) => {
+      if (!prev) return prev;
+      const nextIngredients = [...prev.ingredients];
+      for (const { index, newText } of changes) nextIngredients[index] = newText;
+      return { ...prev, ingredients: nextIngredients };
+    });
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const { index, newText, factor } of changes) {
+        const d = effectiveDetails[index];
+        next[index] = {
+          raw: newText,
+          macros: d.macros ? (scaleValues(d.macros as unknown as Record<string, number>, factor) as unknown as NutritionMacro) : d.macros,
+          micros: scaleValues(d.micros, factor),
+          grams: d.grams !== null ? d.grams * factor : d.grams,
+          matchedDescription: d.matchedDescription,
+          matchSource: d.matchSource,
+          matchConfidence: d.matchConfidence,
+          gramsSource: d.gramsSource,
+          needsQuantity: false,
+          fdcId: d.fdcId,
+          variantOptions: [],
+        };
+      }
+      return next;
+    });
+    for (const { index } of changes) clearManualEntry(index);
+    setConfirmedVariants((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const { index } of changes) {
+        if (index in next) {
+          delete next[index];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setScaleOpen(false);
+  }
+
   // Applies one or both of the suggested swaps in a single update.
   function applyOptimizeSwaps(swaps: OptimizeSuggestion[]) {
     if (swaps.length === 0) return;
@@ -716,6 +782,10 @@ export default function RecipeAnalysis() {
             <InfoTooltip text={OPTIMIZE_INFO} />
           </div>
           <div className="flex items-center gap-1.5">
+            <ScaleButton disabled={!(macrosReady && microsReady)} onClick={handleScaleClick} />
+            <InfoTooltip text={SCALE_INFO} />
+          </div>
+          <div className="flex items-center gap-1.5">
             <SaveRecipeButton
               disabled={!(macrosReady && microsReady)}
               saved={justSaved}
@@ -782,6 +852,10 @@ export default function RecipeAnalysis() {
                 onSelect={handleOptimize}
               />
               <InfoTooltip text={OPTIMIZE_INFO} />
+            </div>
+            <div className="flex items-center gap-1.5">
+                <ScaleButton disabled={!(macrosReady && microsReady)} onClick={handleScaleClick} />
+              <InfoTooltip text={SCALE_INFO} />
             </div>
             <div className="flex items-center gap-1.5">
               <SaveRecipeButton
@@ -972,9 +1046,19 @@ export default function RecipeAnalysis() {
         message={
           signUpPromptReason === "optimize"
             ? "Create a free account to use Optimize — Claude's AI-suggested ingredient swaps, verified against real USDA data."
-            : "Create a free account to save this recipe to My Recipes and come back to it later."
+            : signUpPromptReason === "scale"
+              ? "Create a free account to scale this recipe to your macro goals — it uses your saved goals and weekly plan."
+              : "Create a free account to save this recipe to My Recipes and come back to it later."
         }
       />
+      {scaleOpen && effectiveServings && (
+        <ScaleToMacrosModal
+          ingredients={effectiveDetails}
+          servings={effectiveServings}
+          onClose={() => setScaleOpen(false)}
+          onApply={applyScaleChanges}
+        />
+      )}
       {optimizeResult && (
         <OptimizeSuggestionModal
           result={optimizeResult}
@@ -1263,6 +1347,20 @@ function LoadingRing() {
         </svg>
       )}
     </div>
+  );
+}
+
+function ScaleButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabled ? "Finish the macro and micro breakdown above to scale this recipe" : undefined}
+      className="whitespace-nowrap rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800"
+    >
+      Scale to my macros
+    </button>
   );
 }
 
