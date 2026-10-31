@@ -39,10 +39,39 @@ export type MacroProfile = {
   // back on restores whatever split was last set up rather than losing it.
   mealsEnabled: boolean;
   macroColors: MacroColors;
+  // Optional calorie goal + lean body mass (lb) that drive the "grams per
+  // lb of lean body mass" helpers on Daily Macros. Both are optional so
+  // profiles saved before this existed load unchanged; a missing
+  // calorieTarget just means "whatever the macros add up to".
+  calorieTarget?: number | null;
+  leanBodyMass?: number | null;
+  // Whether the grams-per-lb calculator is shown (and active) on Daily
+  // Macros; off by default.
+  leanMassCalcEnabled?: boolean;
+  // What the user typed into each "grams per lb of lean body mass" box —
+  // only ever set by the user, never worked out from the gram targets. The
+  // auto-filled macro has no entry.
+  gramsPerLb?: Partial<Record<keyof Macro, number | null>>;
 };
 
 export function emptyMacro(): Macro {
   return { protein: 0, carbs: 0, fat: 0 };
+}
+
+export const MACRO_KEYS: (keyof Macro)[] = ["protein", "carbs", "fat"];
+export const CALORIES_PER_GRAM: Record<keyof Macro, number> = { protein: 4, carbs: 4, fat: 9 };
+
+// Sets `auto` to whatever grams make the day land on `targetCalories`,
+// given the other two macros as they are. Never goes below 0 grams.
+export function fillRemainingMacro(macros: Macro, auto: keyof Macro, targetCalories: number): Macro {
+  const lockedCalories = lockedMacroCalories(macros, auto);
+  const grams = Math.max(0, Math.round((targetCalories - lockedCalories) / CALORIES_PER_GRAM[auto]));
+  return { ...macros, [auto]: grams };
+}
+
+// Calories from every macro except `auto`.
+export function lockedMacroCalories(macros: Macro, auto: keyof Macro): number {
+  return MACRO_KEYS.reduce((sum, key) => (key === auto ? sum : sum + macros[key] * CALORIES_PER_GRAM[key]), 0);
 }
 
 // Standard Atwater factors: 4 kcal/g protein, 4 kcal/g carbs, 9 kcal/g fat.

@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
+  MACRO_KEYS,
+  fillRemainingMacro,
+  lockedMacroCalories,
   type Macro,
   type MacroColors,
   type MacroProfile,
@@ -42,6 +45,9 @@ export default function MacroSettings() {
   // Two-click confirm for applying a preset, keyed by preset id.
   const [presetArmedId, setPresetArmedId] = useState<string | null>(null);
   const [signUpPromptOpen, setSignUpPromptOpen] = useState(false);
+  // Order the user filled in the g/lb boxes (oldest first) — only used to
+  // decide which one gives way if they fill in a third.
+  const [perLbOrder, setPerLbOrder] = useState<(keyof Macro)[]>([]);
 
   // Load once, as soon as we know whether there's a real account — guests
   // get a local-only default profile (nothing ever hits Supabase for
@@ -81,8 +87,94 @@ export default function MacroSettings() {
   const mealCalories = calories(mealTotals);
   const macroStatus = macroMatchStatus(mealTotals, profile.dailyTarget);
 
-  function updateDailyTarget(next: Macro) {
-    setProfile((p) => (p ? { ...p, dailyTarget: next } : p));
+  // The g/lb boxes the user has filled in. With two filled in, the third
+  // macro is the "auto" one: its grams are whatever's left of the target
+  // calories. (Never more than two — filling a third clears the oldest.)
+  const lbmCalcOn = profile.leanMassCalcEnabled === true;
+  const enteredPerLb = lbmCalcOn ? MACRO_KEYS.filter((k) => profile.gramsPerLb?.[k] != null) : [];
+  const autoMacro = enteredPerLb.length === 2 ? (MACRO_KEYS.find((k) => !enteredPerLb.includes(k)) ?? null) : null;
+  const leanBodyMass = profile.leanBodyMass && profile.leanBodyMass > 0 ? profile.leanBodyMass : null;
+  const targetCalories = profile.calorieTarget ?? dailyCalories;
+  const calorieGap = dailyCalories - targetCalories;
+  const overTarget =
+    autoMacro !== null &&
+    profile.calorieTarget != null &&
+    lockedMacroCalories(profile.dailyTarget, autoMacro) > profile.calorieTarget;
+
+  // Typing grams directly: the calorie target follows whatever the macros
+  // now add up to, and that macro's g/lb box no longer applies.
+  function updateMacroGrams(key: keyof Macro, grams: number) {
+    setProfile((p) =>
+      p
+        ? {
+            ...p,
+            dailyTarget: { ...p.dailyTarget, [key]: grams },
+            calorieTarget: null,
+            gramsPerLb: { ...p.gramsPerLb, [key]: null },
+          }
+        : p,
+    );
+  }
+
+  function updateCalorieTarget(next: number) {
+    setProfile((p) =>
+      p
+        ? {
+            ...p,
+            calorieTarget: next,
+            dailyTarget: autoMacro ? fillRemainingMacro(p.dailyTarget, autoMacro, next) : p.dailyTarget,
+          }
+        : p,
+    );
+  }
+
+  // New lean body mass: re-work the grams for any macro the user gave a
+  // g/lb figure, then refill the auto macro. The g/lb boxes themselves are
+  // left exactly as typed.
+  function updateLeanBodyMass(next: number) {
+    setProfile((p) => {
+      if (!p) return p;
+      const mass = next > 0 ? next : null;
+      if (!mass || enteredPerLb.length === 0) return { ...p, leanBodyMass: mass };
+      const target = p.calorieTarget ?? calories(p.dailyTarget);
+      let dailyTarget = { ...p.dailyTarget };
+      for (const k of enteredPerLb) dailyTarget[k] = Math.round((p.gramsPerLb?.[k] ?? 0) * mass);
+      if (autoMacro) dailyTarget = fillRemainingMacro(dailyTarget, autoMacro, target);
+      return { ...p, leanBodyMass: mass, calorieTarget: autoMacro ? target : p.calorieTarget, dailyTarget };
+    });
+  }
+
+  // `perLb` is null when the user empties the box — the grams are left as
+  // they are.
+  function updateGramsPerLb(key: keyof Macro, perLb: number | null) {
+    if (!leanBodyMass) return;
+    if (perLb === null) {
+      setProfile((p) => (p ? { ...p, gramsPerLb: { ...p.gramsPerLb, [key]: null } } : p));
+      return;
+    }
+    // Once two others are filled in, the one entered longest ago gives way
+    // and becomes the auto-filled macro.
+    const others = enteredPerLb.filter((k) => k !== key);
+    const kept =
+      others.length === 2
+        ? [...others].sort((a, b) => perLbOrder.indexOf(b) - perLbOrder.indexOf(a)).slice(0, 1)
+        : others;
+    const entered = [...kept, key];
+    const auto = entered.length === 2 ? (MACRO_KEYS.find((k) => !entered.includes(k)) ?? null) : null;
+    setPerLbOrder([...perLbOrder.filter((k) => k !== key), key]);
+    setProfile((p) => {
+      if (!p) return p;
+      const target = p.calorieTarget ?? calories(p.dailyTarget);
+      const withKey = { ...p.dailyTarget, [key]: Math.round(perLb * leanBodyMass) };
+      const gramsPerLb = { ...p.gramsPerLb, [key]: perLb };
+      if (!auto) return { ...p, calorieTarget: target, dailyTarget: withKey, gramsPerLb };
+      return {
+        ...p,
+        calorieTarget: target,
+        dailyTarget: fillRemainingMacro(withKey, auto, target),
+        gramsPerLb: { ...gramsPerLb, [auto]: null },
+      };
+    });
   }
 
   function updateMacroColor(key: keyof MacroColors, value: string) {
@@ -148,7 +240,11 @@ export default function MacroSettings() {
   function handleApplyPresetClick(preset: MacroPreset) {
     if (presetArmedId === preset.id) {
       const applied = applyMacroPreset(preset);
-      setProfile((p) => (p ? { ...p, dailyTarget: applied.dailyTarget, meals: applied.meals } : p));
+      setProfile((p) =>
+        p
+          ? { ...p, dailyTarget: applied.dailyTarget, meals: applied.meals, calorieTarget: null, gramsPerLb: undefined }
+          : p,
+      );
       setPresetArmedId(null);
     } else {
       setPresetArmedId(preset.id);
@@ -214,7 +310,28 @@ export default function MacroSettings() {
               Choose colors
             </button>
           </div>
-          <span className="text-sm font-medium text-zinc-400">{dailyCalories} cals</span>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <label className="flex items-center gap-1.5 rounded-full border border-zinc-200 py-1 pr-3 pl-3 text-xs font-medium text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+              Target
+              <CalorieTargetInput value={targetCalories} onChange={updateCalorieTarget} />
+              cals
+            </label>
+            <div
+              className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-500 dark:border-zinc-700 dark:text-zinc-400"
+              title="Calories from the protein, carbs and fat below"
+            >
+              Macros
+              <span className="text-sm font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+                {dailyCalories}
+              </span>
+              cals
+              {calorieGap !== 0 && (
+                <span className="text-zinc-400">
+                  ({Math.abs(calorieGap)} {calorieGap > 0 ? "over" : "under"})
+                </span>
+              )}
+            </div>
+          </div>
         </div>
 
         {colorsOpen && (
@@ -240,24 +357,87 @@ export default function MacroSettings() {
           </div>
         )}
 
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            Macros by Lean Body Mass - Calculator
+          </h3>
+          <ToggleSwitch
+            checked={lbmCalcOn}
+            onChange={() => setProfile((p) => (p ? { ...p, leanMassCalcEnabled: !p.leanMassCalcEnabled } : p))}
+            label="Macros by Lean Body Mass - Calculator"
+          />
+          <InfoTooltip text="Set your macros by grams per pound of lean body mass. Enter your lean mass, then the g/lb for any two macros — the third fills in to hit your target calories." />
+        </div>
+
+        {lbmCalcOn && (
+        <div className="flex flex-col gap-3 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-800">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Lean body mass (lb)
+              </span>
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0}
+                placeholder="e.g. 144"
+                value={leanBodyMass ?? ""}
+                onChange={(e) => updateLeanBodyMass(Number(e.target.value) || 0)}
+                className="w-36 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600"
+              />
+            </label>
+            <p className="min-w-48 flex-1 text-xs text-zinc-400">
+              Enter grams per lb of lean body mass for any two macros and the third fills in to
+              hit your target calories.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            {MACRO_KEYS.map((key) => (
+              <PerLbField
+                key={key}
+                label={`${key[0].toUpperCase()}${key.slice(1)} (g/lb)${leanBodyMass && key === autoMacro ? " · auto" : ""}`}
+                color={profile.macroColors[key]}
+                disabled={!leanBodyMass}
+                placeholder={
+                  !leanBodyMass
+                    ? "Enter lean mass first"
+                    : key === autoMacro
+                      ? "Auto-filled"
+                      : `Enter ${key} g per lb`
+                }
+                value={profile.gramsPerLb?.[key] ?? null}
+                onChange={(v) => updateGramsPerLb(key, v)}
+              />
+            ))}
+          </div>
+          {overTarget && (
+            <p className="text-xs font-medium text-rose-500">
+              Your other two macros already use{" "}
+              {lockedMacroCalories(profile.dailyTarget, autoMacro)} cals — more than your{" "}
+              {profile.calorieTarget} cal target, so {autoMacro} is set to 0.
+            </p>
+          )}
+        </div>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <NumberField
             label="Protein (g)"
             color={profile.macroColors.protein}
             value={profile.dailyTarget.protein}
-            onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, protein: v })}
+            onChange={(v) => updateMacroGrams("protein", v)}
           />
           <NumberField
             label="Carbs (g)"
             color={profile.macroColors.carbs}
             value={profile.dailyTarget.carbs}
-            onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, carbs: v })}
+            onChange={(v) => updateMacroGrams("carbs", v)}
           />
           <NumberField
             label="Fat (g)"
             color={profile.macroColors.fat}
             value={profile.dailyTarget.fat}
-            onChange={(v) => updateDailyTarget({ ...profile.dailyTarget, fat: v })}
+            onChange={(v) => updateMacroGrams("fat", v)}
           />
         </div>
       </section>
@@ -393,6 +573,82 @@ export default function MacroSettings() {
         message="Create a free account to save your macro targets and presets so they're here next time you visit."
       />
     </div>
+  );
+}
+
+// The target-calories box in the pill. Keeps the typed text in local state
+// while editing so the field can be emptied (a plain number input pinned to
+// 0 turns "1800" into "01800"); shows the real value again once it loses
+// focus.
+function CalorieTargetInput({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      aria-label="Target calories"
+      value={draft ?? value}
+      onChange={(e) => {
+        setDraft(e.target.value);
+        onChange(Math.max(0, Number(e.target.value) || 0));
+      }}
+      onBlur={() => setDraft(null)}
+      className="w-16 bg-transparent text-right text-sm font-semibold text-zinc-900 outline-none [appearance:textfield] dark:text-zinc-50 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+    />
+  );
+}
+
+// A grams-per-lb box. Keeps what's being typed in local state while it's
+// being edited, so a half-typed "0." isn't rewritten out from under the
+// user; otherwise it shows what the user last entered (blank until then).
+function PerLbField({
+  label,
+  color,
+  value,
+  disabled,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  color: string;
+  value: number | null;
+  disabled: boolean;
+  placeholder: string;
+  onChange: (value: number | null) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value === null ? "" : String(value));
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+        {label}
+      </span>
+      <input
+        type="number"
+        inputMode="decimal"
+        min={0}
+        step={0.05}
+        disabled={disabled}
+        placeholder={placeholder}
+        value={shown}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          const n = parseFloat(e.target.value);
+          if (e.target.value === "") onChange(null);
+          else if (!Number.isNaN(n) && n >= 0) onChange(n);
+        }}
+        onBlur={() => setDraft(null)}
+        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-400 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600"
+      />
+    </label>
   );
 }
 
