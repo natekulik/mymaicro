@@ -65,8 +65,9 @@ export default function MyRecipes() {
   const [currentWeekStart, setCurrentWeekStart] = useState<string | null>(null);
   const [groups, setGroups] = useState<RecipeGroup[]>([]);
   const [groupAssignments, setGroupAssignments] = useState<RecipeGroupAssignments | null>(null);
-  // Which group's pill is active as a filter — null shows every recipe.
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  // Which groups are ticked in the group filter dropdown — empty shows
+  // every recipe; otherwise a recipe shows if it's in any ticked group.
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
 
   // This whole page is about saved data — a guest has none, so there's
   // nothing useful to load. The account-required early return below
@@ -138,10 +139,14 @@ export default function MyRecipes() {
     });
   }
 
-  const visibleRecipes = selectedGroupId
-    ? recipes.filter((r) => (groupAssignments?.[r.id] ?? []).includes(selectedGroupId))
-    : recipes;
-  const selectedGroupName = groups.find((g) => g.id === selectedGroupId)?.name;
+  const visibleRecipes =
+    selectedGroupIds.length > 0
+      ? recipes.filter((r) => (groupAssignments?.[r.id] ?? []).some((id) => selectedGroupIds.includes(id)))
+      : recipes;
+  const selectedGroupNames = groups
+    .filter((g) => selectedGroupIds.includes(g.id))
+    .map((g) => g.name)
+    .join(", ");
 
   if (!userLoading && !user) {
     return (
@@ -163,26 +168,16 @@ export default function MyRecipes() {
         </p>
       </header>
 
+      {/* Deliberately not a scrolling row: that would clip its own popovers
+          (the group dropdown and "+ Add Group") into a tiny window instead
+          of letting them float over the recipe cards below. */}
       {loaded && recipes.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          <GroupSearchDropdown groups={groups} selectedGroupId={selectedGroupId} onSelect={setSelectedGroupId} />
-          {groups.map((group) => {
-            const active = selectedGroupId === group.id;
-            return (
-              <button
-                key={group.id}
-                type="button"
-                onClick={() => setSelectedGroupId(active ? null : group.id)}
-                className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                  active
-                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-900"
-                    : "border-zinc-200 text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                }`}
-              >
-                {group.name}
-              </button>
-            );
-          })}
+        <div className="relative z-20 flex flex-wrap items-center gap-2">
+          <GroupSearchDropdown
+            groups={groups}
+            selectedGroupIds={selectedGroupIds}
+            onChange={setSelectedGroupIds}
+          />
           <AddGroupPill onAdd={handleAddGroup} />
         </div>
       )}
@@ -196,7 +191,7 @@ export default function MyRecipes() {
 
       {loaded && recipes.length > 0 && visibleRecipes.length === 0 && (
         <p className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
-          No recipes in &quot;{selectedGroupName}&quot; yet — open a recipe below and use &quot;+
+          No recipes in &quot;{selectedGroupNames}&quot; yet — open a recipe below and use &quot;+
           Add to Group&quot; to put it here.
         </p>
       )}
@@ -460,28 +455,37 @@ function AddToPlanControl({
   );
 }
 
-// The always-first pill in the group row — a searchable dropdown over
-// every group, so a group can be picked even once there are too many
-// pills to see without scrolling the row.
+// The group filter: a searchable dropdown with a checkbox per group, so
+// any number of groups can be ticked at once (a recipe shows if it's in
+// any of them). Nothing ticked means "All Recipes". Stays open while
+// ticking so several can be picked in one go.
 function GroupSearchDropdown({
   groups,
-  selectedGroupId,
-  onSelect,
+  selectedGroupIds,
+  onChange,
 }: {
   groups: RecipeGroup[];
-  selectedGroupId: string | null;
-  onSelect: (groupId: string | null) => void;
+  selectedGroupIds: string[];
+  onChange: (groupIds: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const containerRef = useCloseOnOutsideClick<HTMLDivElement>(open, () => setOpen(false));
-  const selected = groups.find((g) => g.id === selectedGroupId);
   const filtered = groups.filter((g) => g.name.toLowerCase().includes(query.toLowerCase()));
+  const selectedGroups = groups.filter((g) => selectedGroupIds.includes(g.id));
+  const label =
+    selectedGroups.length === 0
+      ? "All Recipes"
+      : selectedGroups.length === 1
+        ? selectedGroups[0].name
+        : `${selectedGroups.length} groups`;
 
-  function choose(groupId: string | null) {
-    onSelect(groupId);
-    setOpen(false);
-    setQuery("");
+  function toggle(groupId: string) {
+    onChange(
+      selectedGroupIds.includes(groupId)
+        ? selectedGroupIds.filter((id) => id !== groupId)
+        : [...selectedGroupIds, groupId],
+    );
   }
 
   return (
@@ -491,7 +495,7 @@ function GroupSearchDropdown({
         onClick={() => setOpen((o) => !o)}
         className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
       >
-        {selected ? selected.name : "All Recipes"}
+        {label}
         <svg className={`h-3 w-3 text-zinc-400 transition ${open ? "rotate-180" : ""}`} viewBox="0 0 12 12" fill="none">
           <path
             d="M2.5 4.5L6 8l3.5-3.5"
@@ -503,7 +507,7 @@ function GroupSearchDropdown({
         </svg>
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-10 mt-1 w-52 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="absolute left-0 top-full z-30 mt-1 w-60 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           <input
             type="text"
             autoFocus
@@ -512,13 +516,13 @@ function GroupSearchDropdown({
             onChange={(e) => setQuery(e.target.value)}
             className="mb-1.5 w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs text-zinc-700 outline-none focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
           />
-          <ul className="flex max-h-48 flex-col gap-0.5 overflow-y-auto">
+          <ul className="flex max-h-72 flex-col gap-0.5 overflow-y-auto">
             <li>
               <button
                 type="button"
-                onClick={() => choose(null)}
+                onClick={() => onChange([])}
                 className={`w-full rounded-md px-2 py-1 text-left text-xs ${
-                  !selectedGroupId
+                  selectedGroupIds.length === 0
                     ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50"
                     : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
                 }`}
@@ -528,17 +532,15 @@ function GroupSearchDropdown({
             </li>
             {filtered.map((g) => (
               <li key={g.id}>
-                <button
-                  type="button"
-                  onClick={() => choose(g.id)}
-                  className={`w-full truncate rounded-md px-2 py-1 text-left text-xs ${
-                    selectedGroupId === g.id
-                      ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50"
-                      : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  }`}
-                >
-                  {g.name}
-                </button>
+                <label className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={selectedGroupIds.includes(g.id)}
+                    onChange={() => toggle(g.id)}
+                    className="h-3.5 w-3.5 shrink-0 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-400 dark:border-zinc-600 dark:bg-zinc-800"
+                  />
+                  <span className="truncate">{g.name}</span>
+                </label>
               </li>
             ))}
             {filtered.length === 0 && <li className="px-2 py-1 text-xs text-zinc-400">No groups found.</li>}
@@ -574,7 +576,7 @@ function AddGroupPill({ onAdd }: { onAdd: (name: string) => void }) {
       {open && (
         <form
           onSubmit={handleSubmit}
-          className="absolute left-0 top-full z-10 mt-1 flex w-56 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+          className="absolute left-0 top-full z-30 mt-1 flex w-56 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
         >
           <input
             type="text"
