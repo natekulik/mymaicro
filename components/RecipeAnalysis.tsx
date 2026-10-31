@@ -11,6 +11,8 @@ import type {
 import { MICRO_NUTRIENTS, dailyValueLevel } from "@/lib/usda/micro-nutrients";
 import { loadSavedRecipes, saveRecipe, updateSavedRecipe } from "@/lib/saved-recipes";
 import { useUser } from "@/lib/supabase/use-user";
+import { assignRecipeToGroups } from "@/lib/recipe-groups";
+import SaveToGroupPrompt from "./SaveToGroupPrompt";
 import SignUpPrompt from "./SignUpPrompt";
 
 type Mode = "url" | "manual";
@@ -214,6 +216,10 @@ export default function RecipeAnalysis() {
   // Set when saving to My Recipes itself fails (a Supabase write error) —
   // distinct from `error` above, which is about analyzing the recipe.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The "Add to a group?" prompt shown before a NEW recipe is saved, and
+  // whether the save behind it is in flight.
+  const [groupPromptOpen, setGroupPromptOpen] = useState(false);
+  const [savingToGroups, setSavingToGroups] = useState(false);
   // Set when this analysis was opened via "Edit Recipe" from My Recipes —
   // the id of the saved recipe being edited, so the save button updates it
   // in place instead of creating a new one. Cleared by switchMode, since
@@ -574,14 +580,26 @@ export default function RecipeAnalysis() {
   // disabled prop on the button below), so everything here is always a
   // real value — this snapshots the final, already-confirmed numbers
   // rather than the live analyze state.
-  async function handleSaveRecipe() {
+  function handleSaveRecipe() {
     if (!result || !nutrition || !micros || !effectiveServings) return;
     if (!user) {
       setSignUpPromptReason("save");
       setSignUpPromptOpen(true);
       return;
     }
+    // Updating an existing recipe keeps whatever groups it's already in;
+    // only a brand-new one asks which group(s) to file it under.
+    if (editingRecipeId) {
+      void saveRecipeNow([]);
+    } else {
+      setGroupPromptOpen(true);
+    }
+  }
+
+  async function saveRecipeNow(groupIds: string[]) {
+    if (!result || !nutrition || !micros || !effectiveServings) return;
     setSaveError(null);
+    setSavingToGroups(true);
     const patch = {
       title: result.title,
       sourceUrl: result.sourceUrl,
@@ -598,11 +616,16 @@ export default function RecipeAnalysis() {
           return;
         }
       } else {
-        await saveRecipe(patch);
+        const saved = await saveRecipe(patch);
+        await assignRecipeToGroups(saved.id, groupIds);
       }
       setJustSaved(true);
+      setGroupPromptOpen(false);
     } catch (err) {
+      setGroupPromptOpen(false);
       setSaveError(err instanceof Error ? err.message : "Something went wrong saving that recipe.");
+    } finally {
+      setSavingToGroups(false);
     }
   }
 
@@ -917,6 +940,12 @@ export default function RecipeAnalysis() {
           )}
         </div>
       )}
+      <SaveToGroupPrompt
+        open={groupPromptOpen}
+        saving={savingToGroups}
+        onSave={(groupIds) => void saveRecipeNow(groupIds)}
+        onClose={() => setGroupPromptOpen(false)}
+      />
       <SignUpPrompt
         open={signUpPromptOpen}
         onClose={() => setSignUpPromptOpen(false)}

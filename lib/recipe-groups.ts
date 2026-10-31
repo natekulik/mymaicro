@@ -136,6 +136,19 @@ export async function saveRecipeGroupAssignments(assignments: RecipeGroupAssignm
   }
 }
 
+// Puts one (already-saved) recipe into the given groups without touching
+// anyone else's assignments — used when a recipe is first saved from the
+// analysis page.
+export async function assignRecipeToGroups(recipeId: string, groupIds: string[]): Promise<void> {
+  if (groupIds.length === 0) return;
+  const supabase = createClient();
+  const userId = await requireUserId(supabase);
+  const { error } = await supabase
+    .from("recipe_group_assignments")
+    .insert(groupIds.map((groupId) => ({ user_id: userId, recipe_id: recipeId, group_id: groupId })));
+  assertNoError(error);
+}
+
 export function addRecipeToGroup(
   assignments: RecipeGroupAssignments,
   recipeId: string,
